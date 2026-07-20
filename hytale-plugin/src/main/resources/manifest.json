@@ -9,8 +9,12 @@
         }
     ],
     "ServerVersion": "*",
-    "Dependencies": {},
-    "OptionalDependencies": {},
+    "Dependencies": {
+        
+    },
+    "OptionalDependencies": {
+        
+    },
     "DisabledByDefault": false,
     "Main": "com.orffyrus.npcai.NpcAiPlugin",
     "IncludesAssetPack": false

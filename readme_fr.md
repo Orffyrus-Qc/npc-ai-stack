@@ -95,19 +95,27 @@ face aux vraies API du plugin, une charge multi-PNJ soutenue, ou
 `skill_writer.py` face au vrai GPU (vérifié seulement avec un faux LLM/BDD —
 voir [la section sur le méta-agent rédacteur de compétences](#le-méta-agent-rédacteur-de-compétences)).
 
-### 🐄 Un autre genre de « vérifié » : l'ébauche du plugin Hytale
+### 🐄 L'ébauche du plugin Hytale : du bytecode vérifié à un vrai démarrage
 
-[`hytale-plugin/`](hytale-plugin/) (ajouté le 2026-07-20) est un cas différent
-du reste de cette section : chaque classe/méthode utilisée a été confirmée
-réelle en inspectant le bytecode d'un vrai `HytaleServer.jar` installé
-(v0.5.7), pas devinée depuis la documentation. C'est plus solide qu'une
-supposition, mais **ça n'a jamais été compilé** — aucun JDK 25 n'était
-disponible dans l'environnement qui l'a écrit. Lisez
-[`hytale-plugin/README.md`](hytale-plugin/README.md) avant de faire
-confiance à quoi que ce soit ici ; il liste précisément ce qui est vérifié
-par bytecode contre ce qui reste un placeholder (notamment : le changement
-de thread avant de toucher l'état du monde depuis le callback du bridge, et
-la conversation multi-tours basée sur le chat).
+[`hytale-plugin/`](hytale-plugin/) (ajouté le 2026-07-20) a commencé avec
+chaque classe/méthode confirmée réelle en inspectant le bytecode d'un vrai
+`HytaleServer.jar` installé (v0.5.7), pas devinée depuis la documentation.
+Plus tard le même jour, un JDK 25 a été installé et ça a été plus loin :
+`./gradlew build` compile proprement, et `./gradlew runServer` démarre un
+**vrai serveur Hytale local avec ce plugin chargé, configuré et activé**
+jusqu'à « Hytale Server Booted! [Multiplayer, Fresh Universe] » — aucun
+crash, aucune erreur liée au plugin. Ce test a aussi trouvé et corrigé un
+vrai bug dans la tâche Gradle `runServerJar` du template officiel lui-même
+(`--mods` attend un dossier, pas un chemin de jar, et le serveur compte en
+double un dossier de mods passé explicitement s'il est déjà scanné
+automatiquement).
+
+Toujours pas testé : un vrai joueur qui se connecte et clique sur un PNJ.
+Lisez [`hytale-plugin/README.md`](hytale-plugin/README.md) pour le détail
+exact et à jour de ce qui est confirmé contre ce qui reste un placeholder
+(notamment : le changement de thread avant de toucher l'état du monde
+depuis le callback du bridge, et la conversation multi-tours basée sur le
+chat).
 
 ---
 

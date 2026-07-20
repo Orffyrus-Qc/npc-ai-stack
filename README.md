@@ -91,17 +91,24 @@ against real plugin APIs, sustained multi-NPC load, or `skill_writer.py`
 against the real GPU (it was only verified with a fake LLM/DB — see
 [the skill self-improvement section](#the-skill-writer-meta-agent)).
 
-### 🐄 A different kind of "verified": the Hytale plugin scaffold
+### 🐄 The Hytale plugin scaffold: from bytecode-verified to actually booted
 
-[`hytale-plugin/`](hytale-plugin/) (added 2026-07-20) is a different
-situation from the rest of this section — every class/method it calls was
-confirmed to actually exist by inspecting the bytecode of a real installed
-`HytaleServer.jar` (v0.5.7), not guessed from docs. That's stronger than a
-guess, but **it has never been compiled** — no JDK 25 was available in the
-environment that wrote it. Read [`hytale-plugin/README.md`](hytale-plugin/README.md)
-before trusting any of it; it tracks exactly which pieces are bytecode-verified
-vs. still-a-placeholder (notably: the thread-hop for touching world state
-from the bridge's callback, and multi-turn chat-based conversation).
+[`hytale-plugin/`](hytale-plugin/) (added 2026-07-20) started as every
+class/method confirmed to exist by inspecting the bytecode of a real
+installed `HytaleServer.jar` (v0.5.7), not guessed from docs. Later the same
+day, a JDK 25 got installed and it went further: `./gradlew build` compiles
+clean, and `./gradlew runServer` boots a **real local Hytale server with
+this plugin loaded, set up, and enabled** through to `Hytale Server Booted!
+[Multiplayer, Fresh Universe]` — no crash, no plugin errors. That run also
+caught and fixed a real bug in the official plugin template's own Gradle
+task (`--mods` wants a directory, not a jar path, and the server
+double-counts an explicitly-passed mods dir that's already auto-scanned).
+
+Still not tested: an actual player connecting and clicking an NPC. Read
+[`hytale-plugin/README.md`](hytale-plugin/README.md) for the exact,
+up-to-date breakdown of what's confirmed vs. still a placeholder (notably:
+the thread-hop for touching world state from the bridge's callback, and
+multi-turn chat-based conversation).
 
 ---
 

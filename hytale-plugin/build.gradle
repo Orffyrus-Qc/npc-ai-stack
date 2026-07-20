@@ -125,15 +125,34 @@ if (hasHytaleHome) {
         classpath = files(serverJar)
         workingDir = serverRunDir.absolutePath
         doFirst {
-            def modPaths = [shadowJarTask.get().archiveFile.get().asFile.absolutePath]
+            // The template originally passed the shadow jar's own file path
+            // to --mods, but this server build's Options.PathConverter
+            // requires --mods entries to be directories (confirmed by
+            // actually running it: "ValueConversionException: Path must be
+            // a directory!"). Copy the jar into a local mods/ dir instead.
+            def localModsDir = file("${serverRunDir}/mods")
+            localModsDir.mkdirs()
+            copy {
+                from shadowJarTask.get().archiveFile.get().asFile
+                into localModsDir
+            }
+            // Also confirmed by actually running it: the server ALWAYS scans
+            // a working-directory-relative "mods" folder on its own, even
+            // with no --mods flag at all. Passing --mods= pointing at that
+            // same directory again makes it register twice and hard-fail
+            // with "Tried to load duplicate plugin". So: don't pass --mods
+            // for the local dir - only pass it (UserData mods only) when
+            // load_user_mods pulls in a second, different directory.
+            def modPaths = []
             if (load_user_mods.toBoolean()) {
                 modPaths << "${hytaleHome}/UserData/Mods"
             }
+            def modArgs = modPaths.isEmpty() ? [] : ["--mods=${modPaths.join(',')}"]
             setArgs([
                     '--allow-op',
                     '--disable-sentry',
                     "--assets=${assetsZip}",
-                    "--mods=${modPaths.join(',')}"
+                    *modArgs
             ])
         }
     }

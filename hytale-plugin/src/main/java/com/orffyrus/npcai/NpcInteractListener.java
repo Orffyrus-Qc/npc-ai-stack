@@ -54,6 +54,13 @@ public class NpcInteractListener {
             return;
         }
 
+        // getUuid() is marked deprecated-for-removal in this build (compiler
+        // confirmed it via -Xlint:deprecation, no replacement was evident
+        // from the bytecode alone - legacyUuid()/setLegacyUUID() exist too,
+        // suggesting identity is moving toward something else, maybe the
+        // Ref<EntityStore> used elsewhere in this same event). Still works
+        // today and is the clearest stable ID available; revisit when it's
+        // actually removed.
         String npcId = target.getUuid().toString();
         String npcTypeId = npc.getNPCTypeId();
         String playerId = player.getUuid().toString();

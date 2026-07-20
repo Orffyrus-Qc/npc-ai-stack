@@ -83,24 +83,33 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
   fastembed's cache dir, unpinned qdrant-client resolved to a version that
   removed `.search()`, and personality.py's record_outcome() had an
   asyncpg-unparseable unbound placeholder. All fixed; see git log.
-- **2026-07-20, same day: hytale-plugin/ scaffold added.** User installed
-  Hytale; the real `HytaleServer.jar` (v0.5.7) was found on disk and
-  inspected directly (constant-pool dump, no javap/JDK available) to
-  ground every class/method name used in NpcAiPlugin.java and
-  NpcInteractListener.java in bytecode that actually exists, instead of
-  guessing from docs. Confirmed real: manifest.json shape, JavaPlugin/
+- **2026-07-20, same day: hytale-plugin/ scaffold added, then compiled and
+  booted for real.** User installed Hytale; the real `HytaleServer.jar`
+  (v0.5.7) was found on disk and inspected directly (constant-pool dump,
+  no javap/JDK available yet) to ground every class/method name used in
+  NpcAiPlugin.java and NpcInteractListener.java in bytecode that actually
+  exists. Confirmed real that way: manifest.json shape, JavaPlugin/
   setup() lifecycle, EventRegistry.registerGlobal(), PlayerInteractEvent's
-  fields, INonPlayerCharacter as the (non-deprecated) NPC marker. Two
-  things explicitly flagged as unverified in hytale-plugin/README.md: the
-  thread-hop needed before the bridge's reply callback touches world
-  state, and multi-turn chat-based conversation (needs PlayerChatEvent,
-  which is IAsyncEvent-based - a different registration shape than what
-  got used). **None of this has been compiled** - no JDK 25 in this
-  environment. First next step is getting it to compile.
-- NOT yet done: getting hytale-plugin/ to actually compile; sustained
-  multi-player/multi-NPC load test; any run against a real Hytale server
-  or client; skill_writer.py against the real GPU (only verified with a
-  fake LLM/DB so far).
+  fields, INonPlayerCharacter as the (non-deprecated) NPC marker.
+  Then a JDK 25 (Temurin) got installed and `./gradlew build` succeeded
+  clean. Went further still: `./gradlew runServer` booted a real local
+  Hytale server with the plugin loaded, set up, AND enabled, through to
+  "Hytale Server Booted! [Multiplayer, Fresh Universe]" - no crash, no
+  plugin errors. That run also caught a real bug in the official
+  template's own runServerJar Gradle task (--mods wants a directory, not
+  a jar path; the server also auto-scans a CWD-relative mods/ dir, so
+  also passing --mods= pointing at that same dir causes a hard-fail
+  "duplicate plugin" error) - fixed in this repo's build.gradle.
+  Two things still explicitly flagged as unverified in
+  hytale-plugin/README.md: the thread-hop needed before the bridge's
+  reply callback touches world state, and multi-turn chat-based
+  conversation (needs PlayerChatEvent, IAsyncEvent-based - a different
+  registration shape than what got used).
+- NOT yet done: an actual Hytale client connecting and clicking a real
+  NPC (server booted with the plugin enabled, but no player interaction
+  happened in this run); sustained multi-player/multi-NPC load test;
+  skill_writer.py against the real GPU (only verified with a fake LLM/DB
+  so far).
 
 ## Agreed next steps (in order)
 
@@ -120,11 +129,12 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
    `run_skill_validation.sh`.
 2. Load-test llama.cpp slots on the real GPU; tune --parallel/ctx tradeoff.
 3. **In progress** — Wire NpcAiBridge.java into the current Hytale plugin
-   API. `hytale-plugin/` now exists with a bytecode-verified-but-uncompiled
-   first draft (see above and hytale-plugin/README.md). Remaining: get a
-   JDK 25, compile it, fix whatever the compiler catches, confirm the
-   thread-hop for touching world state, add PlayerChatEvent for real
-   conversations, test in an actual singleplayer world.
+   API. `hytale-plugin/` compiles clean against a real JDK 25 and boots
+   successfully in a real local Hytale server (plugin loaded, set up, AND
+   enabled - see above and hytale-plugin/README.md). Remaining: connect an
+   actual Hytale client and click a real NPC to confirm PlayerInteractEvent
+   fires as expected; confirm the thread-hop for touching world state; add
+   PlayerChatEvent for real multi-turn conversations.
 4. ~~Optional: GitHub Actions workflow running skill_harness.py on push.~~
    **Done** — see `.github/workflows/skill-validation.yml`. Two jobs: a
    harness self-test against `sandbox/examples/` (one known-good skill that
