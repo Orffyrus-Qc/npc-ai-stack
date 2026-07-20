@@ -102,6 +102,21 @@ memory, sandboxed skill self-improvement, all on one box with one small GPU.
 > hooks — that wiring, and a live playtest against an actual server, are
 > both still outstanding (see the warning box up top).
 
+### Worked example: one blacksmith, three visits
+
+| Visit | What happens | Why |
+|---|---|---|
+| 1st meeting | Ask about a sword → *"Aye, I can forge you a blade, but good steel isn't cheap."* | Baseline personality (`warmth=0.3, aggression=0.4`) renders as "cold and curt"; no memories yet, so the prompt says `(first meeting)`. |
+| 3 days later | Ask again → *"Back for that blade again? Coin ready this time?"* | `recall_similar()` finds the earlier exchange in Qdrant and feeds it back into the prompt as a relevant memory. |
+| After a few gifts | Tone warms toward "polite but reserved" — but only with you | Each `player_gave_gift` outcome nudges `trust_of_player` and `warmth` a small, bounded amount. Trust is tracked per (NPC, player) pair, so other players see no change. |
+
+Attack that same blacksmith instead, and `player_attacked_npc` tanks trust
+hard and raises aggression — but since `warmth`/`aggression` are stored
+per-NPC (not per-player), the blacksmith gets warier and angrier *with
+everyone*, while their trust specifically in you drops the most. Leave
+them alone for a couple of in-game weeks and both effects decay back
+toward baseline.
+
 ## Layout
 
 ```
