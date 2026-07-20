@@ -80,6 +80,15 @@ class PersonalityStore:
                     updated_at DOUBLE PRECISION NOT NULL,
                     PRIMARY KEY (npc_id, player_id)
                 );
+                CREATE TABLE IF NOT EXISTS npc_outcome_log (
+                    id BIGSERIAL PRIMARY KEY,
+                    npc_id TEXT NOT NULL,
+                    player_id TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    ts DOUBLE PRECISION NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_outcome_log_npc_ts
+                    ON npc_outcome_log (npc_id, ts);
             """)
 
     async def load(self, npc_id: str, player_id: str,
@@ -141,4 +150,31 @@ class PersonalityStore:
                 "SET trust_of_player=$3, updated_at=$5",
                 npc_id, player_id, p.trust_of_player,
                 json.dumps(vars(default_baseline)), now)
+            await conn.execute(
+                "INSERT INTO npc_outcome_log (npc_id, player_id, outcome, ts) "
+                "VALUES ($1,$2,$3,$4)",
+                npc_id, player_id, outcome, now)
         return p
+
+    async def recent_outcome_counts(
+        self, npc_id: str, since_days: float = 3.0
+    ) -> dict[str, int]:
+        """
+        Counts of each outcome type for this NPC in the last `since_days`.
+        Used by the skill-writer meta-agent to spot patterns worth writing
+        a new skill for (e.g. lots of player_attacked_npc -> a self-defense
+        skill might be worth proposing).
+        """
+        since_ts = time.time() - since_days * 86400.0
+        async with self._pg.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT outcome, COUNT(*) AS n FROM npc_outcome_log "
+                "WHERE npc_id=$1 AND ts >= $2 GROUP BY outcome ORDER BY n DESC",
+                npc_id, since_ts)
+        return {r["outcome"]: r["n"] for r in rows}
+
+    async def all_npc_ids(self) -> list[str]:
+        async with self._pg.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT DISTINCT npc_id FROM npc_personality WHERE npc_id != '_system'")
+        return [r["npc_id"] for r in rows]

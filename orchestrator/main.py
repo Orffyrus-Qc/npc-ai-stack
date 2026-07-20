@@ -188,12 +188,8 @@ async def compression_daemon() -> None:
     while True:
         await asyncio.sleep(300)  # sweep every 5 minutes
         try:
-            # naive sweep: NPCs seen in personality table
-            async with PERSONALITY._pg.acquire() as conn:  # noqa: SLF001
-                rows = await conn.fetch(
-                    "SELECT DISTINCT npc_id FROM npc_personality")
-            for r in rows:
-                await compress_npc_memory(MEMORY, low_prio_llm, r["npc_id"])
+            for npc_id in await PERSONALITY.all_npc_ids():
+                await compress_npc_memory(MEMORY, low_prio_llm, npc_id)
                 await asyncio.sleep(5)
         except Exception:
             logger.exception("compression sweep error")

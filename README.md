@@ -174,7 +174,8 @@ Plugin connects to `ws://<host>:8765`. Protocol is documented at the top of
 
 ## Skill self-improvement flow
 
-1. A meta-agent (or you) writes candidate `decide(state)->action` skills to `sandbox/candidates/`.
+1. `skill_writer.py` (or you, by hand) writes candidate `decide(state)->action`
+   skills to `sandbox/candidates/`.
 2. Cron runs `run_skill_validation.sh` during low-player windows:
    each candidate executes in a `--network none --read-only` throwaway container
    against `skill_harness.py`.
@@ -186,10 +187,31 @@ The live loop can always adjust *facts* and *personality*; only *behavior
 code* goes through the sandbox gate. That split is what keeps a
 self-improving NPC from becoming a self-sabotaging server.
 
-> 🐄 **Cow note:** the skill-writer meta-agent that actually populates
-> `sandbox/candidates/` isn't built yet — today candidates are added by
-> hand. Watch the sandbox logs before trusting anything it promotes to
-> `approved/`.
+### The skill-writer meta-agent
+
+`orchestrator/skill_writer.py` looks at each NPC's recent outcome history
+(a new `npc_outcome_log` table) and the most recent `sandbox/rejected/*.log`
+entries, asks the LLM to draft a `decide()` for whatever pattern stands out
+(e.g. a lot of `player_attacked_npc` might prompt a self-defense reaction),
+does a *static* syntax/shape check — it never imports or executes what it
+generates — and queues anything plausible into `sandbox/candidates/`. It has
+no path to `approved/`; step 2 above still decides that.
+
+Run it manually or from cron:
+
+```bash
+docker compose run --rm skill-writer --dry-run          # preview, writes nothing
+docker compose run --rm skill-writer                     # writes candidates
+docker compose run --rm skill-writer --npc-id blacksmith_01 --since-days 7
+```
+
+> 🐄 **Cow note:** `skill-writer` is profile-gated (`docker compose up` won't
+> start it) because it calls `llm-inference` directly, bypassing the live
+> orchestrator's dialogue-priority slot arbiter entirely. Running it while
+> players are online will compete with real dialogue for the same
+> `--parallel` slots — only run it during a confirmed low-player window,
+> same rule as `run_skill_validation.sh`. Verified end-to-end with a fake
+> LLM/DB locally; not yet run against the real GPU/model.
 
 CI runs a fast copy of this gate on every push/PR touching `sandbox/**`
 (see [`.github/workflows/skill-validation.yml`](.github/workflows/skill-validation.yml)):

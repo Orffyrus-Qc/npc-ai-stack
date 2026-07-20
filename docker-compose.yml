@@ -20,6 +20,8 @@ services:
       --batch-size 512
       --host 0.0.0.0
       --port 8080
+    ports:
+      - "127.0.0.1:8080:8080"   # loopback-only: smoke-test with curl, don't expose to the LAN
     volumes:
       - ./models:/models:ro
     deploy:
@@ -82,6 +84,28 @@ services:
       interval: 10s
       timeout: 3s
       retries: 10
+
+  # Skill-writer meta-agent: NOT started by `docker compose up` (profile-gated).
+  # Invoke manually or from cron during a confirmed low-player window:
+  #   docker compose run --rm skill-writer [--dry-run] [--npc-id X] [--since-days N]
+  # It calls llm-inference directly, bypassing the live orchestrator's
+  # dialogue-priority slot arbiter - running it while players are online will
+  # compete with real dialogue for the same --parallel slots.
+  skill-writer:
+    build: ./orchestrator
+    profiles: ["tools"]
+    entrypoint: ["python", "skill_writer.py"]
+    environment:
+      - SANDBOX_DIR=/sandbox
+    volumes:
+      - ./sandbox:/sandbox
+    depends_on:
+      llm-inference:
+        condition: service_healthy
+      fact-db:
+        condition: service_healthy
+    cpus: "0.5"
+    mem_limit: 1g
 
   # Sandbox validation is NOT a long-running service - it's the
   # sandbox/run_skill_validation.sh script invoked by cron/systemd-timer

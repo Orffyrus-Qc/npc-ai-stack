@@ -184,7 +184,8 @@ haut de `orchestrator/main.py`.
 
 ## Flux d'auto-amélioration des compétences
 
-1. Un méta-agent (ou vous) écrit des compétences candidates `decide(state)->action` dans `sandbox/candidates/`.
+1. `skill_writer.py` (ou vous, à la main) écrit des compétences candidates
+   `decide(state)->action` dans `sandbox/candidates/`.
 2. Un cron lance `run_skill_validation.sh` pendant les créneaux à faible affluence :
    chaque candidate s'exécute dans un conteneur jetable `--network none --read-only`
    face à `skill_harness.py`.
@@ -197,10 +198,34 @@ seul le *code de comportement* passe par le sas du bac à sable. C'est cette
 séparation qui empêche un PNJ auto-améliorant de devenir un serveur
 auto-saboteur.
 
-> 🐄 **Note de la vache :** le méta-agent rédacteur de compétences qui doit
-> alimenter `sandbox/candidates/` n'est pas encore construit — aujourd'hui,
-> les candidates sont ajoutées à la main. Surveillez les logs du bac à sable
-> avant de faire confiance à ce qu'il promeut vers `approved/`.
+### Le méta-agent rédacteur de compétences
+
+`orchestrator/skill_writer.py` examine l'historique récent des résultats de
+chaque PNJ (nouvelle table `npc_outcome_log`) ainsi que les dernières entrées
+de `sandbox/rejected/*.log`, demande au LLM de rédiger un `decide()` adapté au
+motif observé (beaucoup de `player_attacked_npc` pourrait suggérer une
+réaction d'auto-défense, par exemple), effectue une vérification *statique*
+de syntaxe et de forme — il n'importe ni n'exécute jamais ce qu'il génère —
+et met en file dans `sandbox/candidates/` tout ce qui semble plausible. Il n'a
+aucun accès à `approved/` : c'est toujours l'étape 2 ci-dessus qui décide.
+
+Lancez-le manuellement ou depuis un cron :
+
+```bash
+docker compose run --rm skill-writer --dry-run          # aperçu, n'écrit rien
+docker compose run --rm skill-writer                     # écrit des candidates
+docker compose run --rm skill-writer --npc-id blacksmith_01 --since-days 7
+```
+
+> 🐄 **Note de la vache :** `skill-writer` est verrouillé par profil
+> (`docker compose up` ne le démarre pas) car il appelle `llm-inference`
+> directement, en contournant entièrement l'arbitre de créneaux à priorité
+> dialogue de l'orchestrateur en direct. Le lancer pendant que des joueurs
+> sont en ligne entrera en compétition avec le vrai dialogue pour les mêmes
+> créneaux `--parallel` — ne l'exécutez que pendant une fenêtre de faible
+> affluence confirmée, même règle que pour `run_skill_validation.sh`. Vérifié
+> de bout en bout avec un faux LLM/BDD en local ; pas encore testé sur le
+> vrai GPU/modèle.
 
 La CI exécute une version rapide de ce sas à chaque push/PR touchant
 `sandbox/**` (voir

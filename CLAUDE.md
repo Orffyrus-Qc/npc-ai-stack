@@ -21,7 +21,11 @@ orchestrator/ (Python, asyncio)
   priority_queue.py  GPU slot arbiter (see "hard rules" below)
   llm_client.py      personality+memory → system prompt; llama.cpp client
   memory.py          Qdrant episodic + Postgres semantic facts + compression
-  personality.py     bounded trait nudges, per-player trust, decay to baseline
+  personality.py     bounded trait nudges, per-player trust, decay to baseline,
+                     outcome history log (npc_outcome_log)
+  skill_writer.py    OFFLINE meta-agent: outcome history + rejected/*.log ->
+                     candidate skills. Not started by `docker compose up`
+                     (profile "tools") - never touches approved/ directly.
         │
         ▼
 llm-inference: llama.cpp server-cuda, Qwen2.5-7B-Instruct Q4_K_M,
@@ -42,7 +46,10 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
 4. **Skill code changes go through the sandbox gate** (sandbox/
    run_skill_validation.sh → skill_harness.py → approved/). Facts and
    personality may update live; behavior code may not. Never hot-load
-   unvalidated skills.
+   unvalidated skills. `skill_writer.py` only ever writes to
+   `sandbox/candidates/` and only ever *statically* inspects code it
+   generates (`ast.parse`, never import/exec) — it has no path to
+   `approved/` and must not be given one.
 5. **NpcAiBridge.java stays free of Hytale API imports.** Hytale's NPC/ECS
    plugin APIs were still being renamed across 2026 patches — all game-API
    coupling belongs in the plugin handler code, not the transport.
@@ -66,9 +73,20 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
 
 ## Agreed next steps (in order)
 
-1. **Skill-writer meta-agent**: watches sandbox/rejected/*.log + NPC outcome
+1. ~~Skill-writer meta-agent: watches sandbox/rejected/*.log + NPC outcome
    stats, prompts the model to propose improved candidate skills into
-   sandbox/candidates/. Runs offline/low-priority only (rule 1 applies).
+   sandbox/candidates/.~~ **Done** — `orchestrator/skill_writer.py`, run via
+   `docker compose run --rm skill-writer [--dry-run] [--npc-id X]`. Pulls
+   each NPC's `recent_outcome_counts()` (new `npc_outcome_log` table in
+   personality.py) plus the last few `sandbox/rejected/*.log` as cautionary
+   examples, asks the LLM for a `decide()` candidate, does a static
+   syntax/shape check (never imports/execs the result), and writes anything
+   plausible to `sandbox/candidates/`. Verified end-to-end locally (fake
+   LLM/DB, real `skill_harness.py`) — NOT yet run against the real GPU/model.
+   Read the GPU-contention caveat in the file's docstring before scheduling
+   it: it bypasses the live orchestrator's dialogue-priority slot arbiter, so
+   it must only run during confirmed low-player windows, same as
+   `run_skill_validation.sh`.
 2. Load-test llama.cpp slots on the real GPU; tune --parallel/ctx tradeoff.
 3. Wire NpcAiBridge.java into the current Hytale plugin API (check current
    docs — API surface moves fast; hytalemodding.dev and the official

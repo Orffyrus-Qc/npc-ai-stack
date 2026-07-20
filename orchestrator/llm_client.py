@@ -120,17 +120,28 @@ class LlamaClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def dialogue(self, ctx: NPCContext, player_utterance: str) -> str:
-        payload = {
-            "messages": build_dialogue_messages(ctx, player_utterance),
-            "max_tokens": 80,        # short spoken lines - protects slot throughput
-            "temperature": 0.8,
-            "stop": ["\n"],
-        }
+    async def complete(self, messages: list[dict], max_tokens: int,
+                        temperature: float = 0.7,
+                        stop: Optional[list[str]] = None) -> str:
+        """
+        Generic chat completion, no NPC-dialogue post-processing. Used directly
+        by callers that aren't building an in-character spoken line (e.g. the
+        skill-writer meta-agent generating code, or memory compression).
+        """
+        payload = {"messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+        if stop:
+            payload["stop"] = stop
         resp = await self._client.post(self._url, json=payload)
         resp.raise_for_status()
-        data = resp.json()
-        text = data["choices"][0]["message"]["content"].strip()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+    async def dialogue(self, ctx: NPCContext, player_utterance: str) -> str:
+        text = await self.complete(
+            build_dialogue_messages(ctx, player_utterance),
+            max_tokens=80,        # short spoken lines - protects slot throughput
+            temperature=0.8,
+            stop=["\n"],
+        )
         return text.strip('"')
 
     async def ambient_line(self, ctx: NPCContext, situation: str) -> str:
@@ -138,12 +149,5 @@ class LlamaClient:
         messages = build_dialogue_messages(
             ctx, f"(You mutter to yourself about: {situation}. One short line.)"
         )
-        payload = {
-            "messages": messages,
-            "max_tokens": 40,
-            "temperature": 0.9,
-            "stop": ["\n"],
-        }
-        resp = await self._client.post(self._url, json=payload)
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip().strip('"')
+        text = await self.complete(messages, max_tokens=40, temperature=0.9, stop=["\n"])
+        return text.strip('"')
