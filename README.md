@@ -60,6 +60,37 @@
 > mod. Use at your own risk. If a cow falls on your deployment schedule,
 > that is expected weather in this zone.
 
+### ✅ What's actually been verified (2026-07-20, RTX 3060 12GB)
+
+Unlike most of this README, this part isn't aspirational — the full Docker
+stack was actually brought up against a real GPU and exercised end to end:
+
+- `docker compose up -d --build` → all 4 containers reach healthy/running.
+- Real GPU inference confirmed: llama.cpp served in-character replies
+  (60+ tok/s) using the real Qwen2.5-7B-Instruct Q4_K_M model.
+- **Measured VRAM: a stable ~5.9GB** (idle *or* 4 concurrent requests —
+  llama.cpp pre-allocates the `--parallel` KV cache at startup, it doesn't
+  grow under load), leaving ~6GB free on a 12GB card.
+- A fake "player" WebSocket client (matching `NpcAiBridge.java`'s protocol)
+  held a real multi-turn conversation: the NPC's second reply showed
+  genuine continuity from the first (Qdrant recall working), a
+  `player_gave_gift` outcome correctly nudged `warmth` and
+  `trust_of_player` by the exact expected amounts in Postgres, and the
+  episodic memory count in Qdrant matched the turns sent.
+- This test run found and fixed **four real bugs** that static review
+  hadn't caught: `download_model.sh` assumed a single-file model that
+  doesn't exist on HuggingFace (Qwen splits q4_k_m/q5_k_m into two
+  shards); the non-root orchestrator user broke fastembed's model cache
+  (a regression from hardening the Dockerfile); `qdrant-client`'s
+  unpinned upper bound resolved to a version that removed `.search()`;
+  and `personality.py` had an unbound SQL placeholder that only surfaces
+  as an error against a real Postgres, not on read-through.
+
+**Still not tested**: an actual Hytale server/client, `NpcAiBridge.java`
+against real plugin APIs, sustained multi-NPC load, or `skill_writer.py`
+against the real GPU (it was only verified with a fake LLM/DB — see
+[the skill self-improvement section](#the-skill-writer-meta-agent)).
+
 ---
 
 # NPC AI Stack — single machine, 8–12GB GPU
@@ -158,8 +189,10 @@ curl -s http://localhost:8080/v1/chat/completions -d '{
 Plugin connects to `ws://<host>:8765`. Protocol is documented at the top of
 `orchestrator/main.py`.
 
-> 🐄 **Cow note:** the bring-up above has been syntax-checked, not load-tested.
-> `--parallel` vs. real GPU throughput hasn't been benchmarked, and
+> 🐄 **Cow note:** steps 1-4 above have actually been run on a real RTX 3060 -
+> see [what's been verified](#-whats-actually-been-verified-2026-07-20-rtx-3060-12gb).
+> Still not done: benchmarking `--parallel` under sustained multi-player
+> load (only tested up to 4 concurrent requests briefly), and
 > `NpcAiBridge.java` hasn't been wired into a live Hytale NPC event hook yet.
 
 ## Tuning knobs

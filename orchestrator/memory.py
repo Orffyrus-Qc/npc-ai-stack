@@ -96,15 +96,17 @@ class MemoryStore:
     async def recall_similar(
         self, npc_id: str, query: str, limit: int = 4
     ) -> list[str]:
-        hits = await self._qdrant.search(
+        # AsyncQdrantClient.search() was removed in favor of query_points()
+        # (qdrant-client >= ~1.10) - the response wraps hits in .points.
+        result = await self._qdrant.query_points(
             COLLECTION,
-            query_vector=self._embed(query),
+            query=self._embed(query),
             query_filter=Filter(must=[
                 FieldCondition(key="npc_id", match=MatchValue(value=npc_id)),
             ]),
             limit=limit,
         )
-        return [h.payload["text"] for h in hits]
+        return [h.payload["text"] for h in result.points]
 
     # -- semantic -----------------------------------------------------------
 

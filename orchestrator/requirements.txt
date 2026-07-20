@@ -1,5 +1,5 @@
 websockets>=12.0
 httpx>=0.27
 asyncpg>=0.29
-qdrant-client>=1.9
+qdrant-client>=1.10,<2.0
 fastembed>=0.3

@@ -139,9 +139,13 @@ class PersonalityStore:
         now = time.time()
         async with self._pg.acquire() as conn:
             await conn.execute(
-                "UPDATE npc_personality SET warmth=$3, aggression=$4, humor=$5, "
-                "curiosity=$6, updated_at=$7 WHERE npc_id=$1 AND player_id=''",
-                npc_id, "", p.warmth, p.aggression, p.humor, p.curiosity, now)
+                # player_id='' is a literal in the WHERE clause, not a bind
+                # param - an unused positional arg here previously left $2
+                # unreferenced in the query text, which asyncpg's prepare
+                # step can't type-infer (IndeterminateDatatypeError).
+                "UPDATE npc_personality SET warmth=$2, aggression=$3, humor=$4, "
+                "curiosity=$5, updated_at=$6 WHERE npc_id=$1 AND player_id=''",
+                npc_id, p.warmth, p.aggression, p.humor, p.curiosity, now)
             await conn.execute(
                 "INSERT INTO npc_personality (npc_id, player_id, warmth, aggression, "
                 "humor, curiosity, trust_of_player, baseline, updated_at) "

@@ -60,6 +60,41 @@
 > À utiliser à vos risques et périls. Si une vache tombe sur votre planning
 > de déploiement, c'est une météo normale dans cette zone.
 
+### ✅ Ce qui a réellement été vérifié (2026-07-20, RTX 3060 12 Go)
+
+Contrairement au reste de ce README, cette partie n'est pas aspirationnelle —
+toute la stack Docker a réellement été lancée sur un vrai GPU et testée de
+bout en bout :
+
+- `docker compose up -d --build` → les 4 conteneurs atteignent l'état
+  healthy/running.
+- Inférence GPU réelle confirmée : llama.cpp a servi des réponses en
+  personnage (60+ tok/s) avec le vrai modèle Qwen2.5-7B-Instruct Q4_K_M.
+- **VRAM mesurée : environ 5,9 Go, stable** (au repos comme avec 4 requêtes
+  simultanées — llama.cpp pré-alloue le cache KV `--parallel` au démarrage,
+  il ne grossit pas sous charge), laissant ~6 Go libres sur une carte 12 Go.
+- Un faux « joueur » via un client WebSocket (respectant le protocole de
+  `NpcAiBridge.java`) a tenu une vraie conversation en plusieurs tours : la
+  deuxième réplique du PNJ montrait une vraie continuité avec la première
+  (le rappel Qdrant fonctionne), un événement `player_gave_gift` a ajusté
+  `warmth` et `trust_of_player` exactement du montant attendu dans
+  Postgres, et le nombre de souvenirs épisodiques dans Qdrant correspondait
+  aux tours envoyés.
+- Ce test a permis de trouver et corriger **quatre vrais bugs** que la
+  relecture statique n'avait pas attrapés : `download_model.sh` supposait
+  un modèle en un seul fichier qui n'existe pas sur HuggingFace (Qwen
+  découpe q4_k_m/q5_k_m en deux fragments) ; l'utilisateur non-root de
+  l'orchestrateur cassait le cache de modèle de fastembed (une régression
+  du durcissement du Dockerfile) ; la borne supérieure absente de
+  `qdrant-client` a résolu vers une version qui a supprimé `.search()` ;
+  et `personality.py` avait un paramètre SQL non lié qui ne se révèle
+  qu'en erreur face à un vrai Postgres, pas à la simple lecture du code.
+
+**Toujours pas testé** : un vrai serveur/client Hytale, `NpcAiBridge.java`
+face aux vraies API du plugin, une charge multi-PNJ soutenue, ou
+`skill_writer.py` face au vrai GPU (vérifié seulement avec un faux LLM/BDD —
+voir [la section sur le méta-agent rédacteur de compétences](#le-méta-agent-rédacteur-de-compétences)).
+
 ---
 
 # Stack IA de PNJ — une seule machine, GPU 8–12 Go
@@ -167,10 +202,13 @@ curl -s http://localhost:8080/v1/chat/completions -d '{
 Le plugin se connecte à `ws://<host>:8765`. Le protocole est documenté en
 haut de `orchestrator/main.py`.
 
-> 🐄 **Note de la vache :** la mise en route ci-dessus a été vérifiée
-> syntaxiquement, pas testée en charge. `--parallel` face au débit GPU réel
-> n'a pas été mesuré, et `NpcAiBridge.java` n'a pas encore été branché sur un
-> vrai hook d'événement de PNJ Hytale.
+> 🐄 **Note de la vache :** les étapes 1 à 4 ci-dessus ont réellement été
+> exécutées sur une vraie RTX 3060 - voir
+> [ce qui a été vérifié](#-ce-qui-a-réellement-été-vérifié-2026-07-20-rtx-3060-12-go).
+> Toujours pas fait : mesurer `--parallel` sous charge multi-joueurs
+> soutenue (testé seulement jusqu'à 4 requêtes simultanées, brièvement), et
+> `NpcAiBridge.java` n'a pas encore été branché sur un vrai hook
+> d'événement de PNJ Hytale.
 
 ## Réglages
 

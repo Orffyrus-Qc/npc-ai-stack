@@ -12,7 +12,7 @@ services:
   llm-inference:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
     command: >
-      --model /models/${LLM_MODEL_FILE:-qwen2.5-7b-instruct-q4_k_m.gguf}
+      --model /models/${LLM_MODEL_FILE:-qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf}
       --n-gpu-layers 999
       --ctx-size 8192
       --parallel 4

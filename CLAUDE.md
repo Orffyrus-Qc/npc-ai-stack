@@ -65,11 +65,23 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
 
 ## State when handed off
 
-- All Python passes syntax checks; priority_queue.py demo verified
-  (dialogue wins over an ambient flood).
-- NOT yet done: real load test of --parallel vs. actual GPU throughput;
-  wiring NpcAiBridge into current Hytale NPC event hooks; any live run
-  against a real llama.cpp instance.
+- **2026-07-20: real end-to-end run completed** on an RTX 3060 12GB (see
+  README.md's "What's actually been verified" section for full detail).
+  `docker compose up -d --build` reaches healthy on all 4 services; a fake
+  WebSocket "player" client held a real multi-turn conversation through
+  the actual GPU-backed model; Qdrant recall, Postgres personality/trust
+  math, and outcome logging all confirmed correct with real data. Measured
+  VRAM: stable ~5.9GB whether idle or at 4 concurrent requests.
+- That run surfaced and fixed 4 real bugs invisible to static review: the
+  HF model is split into two shards (download_model.sh/docker-compose.yml
+  assumed one file), the non-root orchestrator Dockerfile user broke
+  fastembed's cache dir, unpinned qdrant-client resolved to a version that
+  removed `.search()`, and personality.py's record_outcome() had an
+  asyncpg-unparseable unbound placeholder. All fixed; see git log.
+- NOT yet done: sustained multi-player/multi-NPC load test; wiring
+  NpcAiBridge into current Hytale NPC event hooks; any run against a real
+  Hytale server or client; skill_writer.py against the real GPU (only
+  verified with a fake LLM/DB so far).
 
 ## Agreed next steps (in order)
 
