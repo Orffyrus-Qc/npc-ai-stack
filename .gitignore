@@ -1,0 +1,7 @@
+models/
+*.gguf
+sandbox/candidates/
+sandbox/rejected/
+__pycache__/
+*.pyc
+.env

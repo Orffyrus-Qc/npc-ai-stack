@@ -1,0 +1,87 @@
+# NPC AI stack for a single machine: 8-core CPU / 32GB RAM / 8-12GB GPU.
+# Requires: docker, docker compose v2, nvidia-container-toolkit.
+#   apt install nvidia-container-toolkit
+#   nvidia-ctk runtime configure --runtime=docker && systemctl restart docker
+# Verify: docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
+
+services:
+  # -- Hytale server runs OUTSIDE this compose (or add it here) -------------
+  # Give it ~3.5 cores / 14GB if you containerize it. The plugin connects to
+  # ws://localhost:8765 (gateway is folded into the orchestrator).
+
+  llm-inference:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    command: >
+      --model /models/qwen2.5-7b-instruct-q4_k_m.gguf
+      --n-gpu-layers 999
+      --ctx-size 8192
+      --parallel 4
+      --cont-batching
+      --batch-size 512
+      --host 0.0.0.0
+      --port 8080
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    cpus: "1.5"
+    mem_limit: 6g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  orchestrator:
+    build: ./orchestrator
+    ports:
+      - "8765:8765"          # WebSocket for the Hytale Java plugin
+    depends_on:
+      llm-inference:
+        condition: service_healthy
+      memory-db:
+        condition: service_started
+      fact-db:
+        condition: service_healthy
+    cpus: "1.5"
+    mem_limit: 3g
+    restart: unless-stopped
+
+  memory-db:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant-data:/qdrant/storage
+    cpus: "0.5"
+    mem_limit: 2g
+    restart: unless-stopped
+
+  fact-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: npc
+      POSTGRES_PASSWORD: npc     # local-only; change if ever exposed
+      POSTGRES_DB: npc
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    cpus: "0.5"
+    mem_limit: 1g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U npc"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  # Sandbox validation is NOT a long-running service - it's the
+  # sandbox/run_skill_validation.sh script invoked by cron/systemd-timer
+  # during low-player windows. It spawns its own throwaway containers.
+
+volumes:
+  qdrant-data:
+  pg-data:
