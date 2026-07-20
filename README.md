@@ -1,7 +1,75 @@
+```text
+╔════════════════════════════════════════════════════════════════════════╗
+║                                                                        ║
+║         ███████╗ █████╗ ██╗     ██╗     ██╗███╗   ██╗ ██████╗          ║
+║         ██╔════╝██╔══██╗██║     ██║     ██║████╗  ██║██╔════╝          ║
+║         █████╗  ███████║██║     ██║     ██║██╔██╗ ██║██║  ███╗         ║
+║         ██╔══╝  ██╔══██║██║     ██║     ██║██║╚██╗██║██║   ██║         ║
+║         ██║     ██║  ██║███████╗███████╗██║██║ ╚████║╚██████╔╝         ║
+║         ╚═╝     ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝          ║
+║                                                                        ║
+║    ██████╗ ██████╗ ██╗    ██╗    ███████╗ ██████╗ ███╗   ██╗███████╗   ║
+║   ██╔════╝██╔═══██╗██║    ██║    ╚══███╔╝██╔═══██╗████╗  ██║██╔════╝   ║
+║   ██║     ██║   ██║██║ █╗ ██║      ███╔╝ ██║   ██║██╔██╗ ██║█████╗     ║
+║   ██║     ██║   ██║██║███╗██║     ███╔╝  ██║   ██║██║╚██╗██║██╔══╝     ║
+║   ╚██████╗╚██████╔╝╚███╔███╔╝    ███████╗╚██████╔╝██║ ╚████║███████╗   ║
+║    ╚═════╝ ╚═════╝  ╚══╝╚══╝     ╚══════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ║
+║                                                                        ║
+║                                                                        ║
+╚════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+# 🐄 YOU HAVE ENTERED A FALLING COW ZONE 🐄
+
+```text
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                      ║
+║  ⚠⚠⚠  STOP. READ THIS BEFORE YOU POINT A REAL SERVER AT THIS.  ⚠⚠⚠                   ║
+║                                                                                      ║
+║  THIS PROJECT IS UNDER CONSTRUCTION.                                                 ║
+║  IT HAS NOT RUN END-TO-END AGAINST A REAL HYTALE SERVER YET.                         ║
+║                                                                                      ║
+║  YOU ARE ENTERING A FALLING COW ZONE.                                                ║
+║  Expect missing pieces, wrong API names, and designs that may                        ║
+║  change without mercy.                                                               ║
+║                                                                                      ║
+║  DO NOT treat this repo as a production NPC brain.                                   ║
+║  DO NOT assume NpcAiBridge.java compiles against your HytaleServer.jar.              ║
+║  DO NOT let the skill self-improvement loop run unattended against                   ║
+║  a live player-facing world without watching the sandbox logs.                       ║
+║                                                                                      ║
+║  HYTALE IS EARLY ACCESS -- PLUGIN APIS MOVE BETWEEN BUILDS.                          ║
+║  GPU/PARALLEL-SLOT TUNING KNOBS ARE STARTING POINTS, NOT BENCHMARKS.                 ║
+║                                                                                      ║
+║  If something here works someday, that will be a pleasant surprise --                ║
+║  not a promise.                                                                      ║
+║                                                                                      ║
+║  Status:  🚧 UNDER CONSTRUCTION  ·  🧪 UNTESTED ON REAL SERVER  ·  🐄 FALLING COW ZONE  ║
+║                                                                                      ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
+```
+
+> ### 🐄 Huge disclaimer (again, on purpose)
+>
+> **Falling Cow Zone** means: experimental self-improving NPC stack, not
+> field-tested against a real Hytale server, not certified, not a finished
+> mod. Use at your own risk. If a cow falls on your deployment schedule,
+> that is expected weather in this zone.
+
+---
+
 # NPC AI Stack — single machine, 8–12GB GPU
 
 Realistic, learning NPCs for a Hytale server: evolving personality, two-tier
 memory, sandboxed skill self-improvement, all on one box with one small GPU.
+
+### Status badge (honest edition)
+
+```text
+🚧 UNDER CONSTRUCTION · 🧪 UNTESTED ON REAL SERVER · 🐄 FALLING COW ZONE
+```
 
 ## Layout
 
@@ -42,6 +110,10 @@ curl -s http://localhost:8080/v1/chat/completions -d '{
 Plugin connects to `ws://<host>:8765`. Protocol is documented at the top of
 `orchestrator/main.py`.
 
+> 🐄 **Cow note:** the bring-up above has been syntax-checked, not load-tested.
+> `--parallel` vs. real GPU throughput hasn't been benchmarked, and
+> `NpcAiBridge.java` hasn't been wired into a live Hytale NPC event hook yet.
+
 ## Tuning knobs
 
 | Symptom | Knob |
@@ -65,3 +137,8 @@ Plugin connects to `ws://<host>:8765`. Protocol is documented at the top of
 The live loop can always adjust *facts* and *personality*; only *behavior
 code* goes through the sandbox gate. That split is what keeps a
 self-improving NPC from becoming a self-sabotaging server.
+
+> 🐄 **Cow note:** the skill-writer meta-agent that actually populates
+> `sandbox/candidates/` isn't built yet — today candidates are added by
+> hand. Watch the sandbox logs before trusting anything it promotes to
+> `approved/`.
