@@ -88,6 +88,19 @@ tasks.named('processResources') {
 tasks.named('shadowJar') {
     archiveClassifier.set('')
     mergeServiceFiles()
+    // runtimeOnly(files(serverJar)) above is only there so IntelliJ's run
+    // config has HytaleServer's classes on its classpath - without this,
+    // shadowJar bundles the ENTIRE ~123MB HytaleServer.jar into what should
+    // be a few KB of our own classes (caught by actually checking the built
+    // jar's file size, not something the build reports as an error). The
+    // real server already has its own classes on its own classpath at
+    // runtime, so our mod jar never needed them included.
+    include 'com/orffyrus/**'
+    include 'manifest.json'
+    // NOT 'META-INF/**' - that pulled in ~30MB of native netty-quic
+    // binaries (.so/.dll/.jnilib) merged in from the server's own runtime
+    // deps. The Jar task writes its own MANIFEST.MF regardless of these
+    // include filters, so nothing needed here for that.
 }
 
 tasks.named('build') {
