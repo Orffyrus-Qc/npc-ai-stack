@@ -37,6 +37,26 @@ from priority_queue import NPCRequestDispatcher
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("npc.orchestrator")
 
+# asyncio.create_task() only holds a weak ref to the task via the event loop -
+# an unreferenced task can be garbage-collected mid-execution. Keep a strong
+# ref here for every fire-and-forget task we spawn, and log anything it raises
+# instead of letting it vanish silently.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _background_tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            logger.error("background task failed", exc_info=t.exception())
+
+    task.add_done_callback(_done)
+    return task
+
+
 # Match llama.cpp --parallel. One slot is implicitly kept honest for
 # compression jobs by the ambient_max_in_flight cap.
 DISPATCHER = NPCRequestDispatcher(
@@ -82,7 +102,7 @@ async def handle_dialogue(msg: dict) -> str:
         ctx.npc_id, lambda: LLM.dialogue(ctx, msg["text"])
     )
     # Remember the exchange (fire-and-forget so we don't add latency)
-    asyncio.create_task(MEMORY.remember_episode(EpisodicEntry(
+    _spawn(MEMORY.remember_episode(EpisodicEntry(
         npc_id=ctx.npc_id,
         player_id=msg.get("player_id", ""),
         text=f'Player said: "{msg["text"][:200]}". I replied: "{reply[:200]}"',
@@ -99,9 +119,17 @@ async def handle_ambient(msg: dict) -> str:
 
 
 async def handle_outcome(msg: dict) -> None:
+    # player_id="" is the sentinel key for the NPC's own shared-trait row
+    # (see PersonalityStore); an outcome with no real player would silently
+    # overwrite that row's trust_of_player instead of tracking a relationship.
+    player_id = msg.get("player_id", "")
+    if not player_id:
+        logger.warning("dropping outcome with no player_id: npc=%s outcome=%s",
+                        msg.get("npc_id"), msg.get("outcome"))
+        return
     baseline = DEFAULT_BASELINES.get(msg.get("npc_role", ""), FALLBACK_BASELINE)
     await PERSONALITY.record_outcome(
-        msg["npc_id"], msg.get("player_id", ""), msg["outcome"], baseline
+        msg["npc_id"], player_id, msg["outcome"], baseline
     )
 
 
@@ -136,7 +164,7 @@ async def plugin_connection(ws) -> None:
     try:
         async for raw in ws:
             # each message handled concurrently - the dispatcher does the gating
-            asyncio.create_task(process(raw))
+            _spawn(process(raw))
     except websockets.ConnectionClosed:
         logger.info("plugin disconnected")
 
@@ -174,7 +202,7 @@ async def compression_daemon() -> None:
 async def main() -> None:
     await MEMORY.start()
     await PERSONALITY.start()
-    asyncio.create_task(compression_daemon())
+    _spawn(compression_daemon())
     async with websockets.serve(plugin_connection, "0.0.0.0", 8765,
                                 ping_interval=20, ping_timeout=20):
         logger.info("orchestrator listening on :8765")

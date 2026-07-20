@@ -12,7 +12,7 @@ services:
   llm-inference:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
     command: >
-      --model /models/qwen2.5-7b-instruct-q4_k_m.gguf
+      --model /models/${LLM_MODEL_FILE:-qwen2.5-7b-instruct-q4_k_m.gguf}
       --n-gpu-layers 999
       --ctx-size 8192
       --parallel 4
@@ -46,7 +46,7 @@ services:
       llm-inference:
         condition: service_healthy
       memory-db:
-        condition: service_started
+        condition: service_healthy
       fact-db:
         condition: service_healthy
     cpus: "1.5"
@@ -60,6 +60,11 @@ services:
     cpus: "0.5"
     mem_limit: 2g
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
 
   fact-db:
     image: postgres:16-alpine

@@ -7,5 +7,5 @@ QUANT="${1:-q4_k_m}"   # or: q5_k_m
 FILE="qwen2.5-7b-instruct-${QUANT}.gguf"
 URL="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/${FILE}"
 echo "Downloading ${FILE} (~4.5-5.5GB)..."
-curl -L --fail -o "models/qwen2.5-7b-instruct-q4_k_m.gguf" "$URL"
-echo "Done. Start the stack: docker compose up -d"
+curl -L --fail -o "models/${FILE}" "$URL"
+echo "Done. Set LLM_MODEL_FILE=${FILE} (e.g. in .env) if this isn't the q4_k_m default, then: docker compose up -d"
