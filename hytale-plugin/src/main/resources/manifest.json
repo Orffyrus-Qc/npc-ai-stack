@@ -17,5 +17,5 @@
     },
     "DisabledByDefault": false,
     "Main": "com.orffyrus.npcai.NpcAiPlugin",
-    "IncludesAssetPack": false
+    "IncludesAssetPack": true
 }

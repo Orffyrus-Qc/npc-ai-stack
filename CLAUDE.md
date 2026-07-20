@@ -131,10 +131,20 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
 3. **In progress** — Wire NpcAiBridge.java into the current Hytale plugin
    API. `hytale-plugin/` compiles clean against a real JDK 25 and boots
    successfully in a real local Hytale server (plugin loaded, set up, AND
-   enabled - see above and hytale-plugin/README.md). Remaining: connect an
-   actual Hytale client and click a real NPC to confirm PlayerInteractEvent
-   fires as expected; confirm the thread-hop for touching world state; add
-   PlayerChatEvent for real multi-turn conversations.
+   enabled - see above and hytale-plugin/README.md).
+   **Live play testing found PlayerInteractEvent never fires for NPC
+   clicks** - real interactions with spawned NPCs produced zero dialogue
+   requests. Root cause found by reading a shipped NPC role JSON directly:
+   NPC interactions run through a JSON Interaction/Action system, not a
+   Java event. Fix: registered a custom `TalkToAI` NPC action type via
+   `NPCPlugin.get().registerCoreComponentType(...)` (same pattern the
+   built-in barter-shop action uses) and shipped a custom `AI_Talker` NPC
+   role that uses it. Confirmed to load at boot; a `Once`/`Enabled`
+   validation FAIL on that role is unresolved and unconfirmed-fatal.
+   Remaining: a real player needs to spawn `AI_Talker` and interact with
+   it to confirm the chain actually reaches the orchestrator (can't be
+   simulated without a connected client); confirm the thread-hop for
+   touching world state; add PlayerChatEvent for multi-turn conversations.
 4. ~~Optional: GitHub Actions workflow running skill_harness.py on push.~~
    **Done** — see `.github/workflows/skill-validation.yml`. Two jobs: a
    harness self-test against `sandbox/examples/` (one known-good skill that

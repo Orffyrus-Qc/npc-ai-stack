@@ -97,6 +97,7 @@ tasks.named('shadowJar') {
     // runtime, so our mod jar never needed them included.
     include 'com/orffyrus/**'
     include 'manifest.json'
+    include 'Server/**'
     // NOT 'META-INF/**' - that pulled in ~30MB of native netty-quic
     // binaries (.so/.dll/.jnilib) merged in from the server's own runtime
     // deps. The Jar task writes its own MANIFEST.MF regardless of these

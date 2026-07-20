@@ -4,6 +4,7 @@ import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.event.events.player.PlayerInteractEvent;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
+import com.hypixel.hytale.server.npc.NPCPlugin;
 
 import javax.annotation.Nonnull;
 
@@ -11,9 +12,16 @@ import javax.annotation.Nonnull;
  * Entry point. Connects to the npc-ai-stack orchestrator (see the repo root
  * docker-compose.yml) and wires NPC interactions to it.
  *
- * Pattern verified against the real template (github.com/realBritakee/
- * hytale-template-plugin) and this machine's installed HytaleServer.jar
- * (v0.5.7) - see NpcInteractListener's docstring for what's still unverified.
+ * 2026-07-20 finding: PlayerInteractEvent (registered below) never actually
+ * fires for NPC clicks in v0.5.7 - confirmed by live play testing, zero
+ * dialogue requests ever reached the orchestrator. Real NPC interactions
+ * (e.g. the built-in barter shops) run entirely through a JSON-driven
+ * Interaction/Action system, not a Java event. The real hook is the
+ * "TalkToAI" action type registered below, built by disassembling the
+ * shipped "OpenBarterShop" action (NPCShopPlugin/ActionOpenBarterShop) as
+ * a working reference - see TalkToAIAction.java. PlayerInteractEvent is
+ * left registered in case it's ever useful for non-NPC interactions
+ * (blocks, items) - it is NOT the NPC-talk hook.
  */
 public class NpcAiPlugin extends JavaPlugin {
 
@@ -23,7 +31,9 @@ public class NpcAiPlugin extends JavaPlugin {
     // pattern (PluginBase.withConfig(...) exists but wasn't explored here).
     private static final String ORCHESTRATOR_URL = "ws://localhost:8765";
 
-    private NpcAiBridge bridge;
+    /** Static so TalkToAIAction (built by the engine's own factory system,
+     * not by us) can reach it - same singleton pattern NPCPlugin.get() uses. */
+    static NpcAiBridge BRIDGE;
 
     public NpcAiPlugin(@Nonnull JavaPluginInit init) {
         super(init);
@@ -33,10 +43,13 @@ public class NpcAiPlugin extends JavaPlugin {
     @Override
     protected void setup() {
         LOGGER.atInfo().log("Connecting to npc-ai-stack orchestrator at " + ORCHESTRATOR_URL);
-        bridge = new NpcAiBridge(ORCHESTRATOR_URL);
-        bridge.connect();
+        BRIDGE = new NpcAiBridge(ORCHESTRATOR_URL);
+        BRIDGE.connect();
 
-        NpcInteractListener listener = new NpcInteractListener(bridge);
+        NpcInteractListener listener = new NpcInteractListener(BRIDGE);
         this.getEventRegistry().registerGlobal(PlayerInteractEvent.class, listener::onPlayerInteract);
+
+        NPCPlugin.get().registerCoreComponentType("TalkToAI", TalkToAIActionBuilder::new);
+        LOGGER.atInfo().log("Registered TalkToAI NPC action type");
     }
 }
