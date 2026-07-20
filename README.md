@@ -71,6 +71,37 @@ memory, sandboxed skill self-improvement, all on one box with one small GPU.
 🚧 UNDER CONSTRUCTION · 🧪 UNTESTED ON REAL SERVER · 🐄 FALLING COW ZONE
 ```
 
+## What this does in Hytale
+
+- **NPCs talk back in character.** A player interacts with an NPC, the
+  plugin sends the event over WebSocket, and the orchestrator builds a
+  prompt from that NPC's personality + memory and gets a reply out of a
+  local Qwen2.5-7B model — no cloud calls, no per-message API cost.
+- **They remember you, specifically.** Two-tier memory: recent, concrete
+  moments live in Qdrant (episodic), durable facts about you and the world
+  get promoted into Postgres (semantic) and compressed over time so an
+  NPC's context doesn't bloat forever. Ask a blacksmith about a quest you
+  mentioned three days ago and it can still know.
+- **Personalities drift, on purpose, within limits.** Each NPC has bounded
+  trait nudges and a per-player trust score that shift based on how you
+  treat them, then decay back toward baseline — so a grumpy NPC can warm
+  up to a player over time without turning into a different character.
+- **Idle NPCs mutter to themselves.** Ambient one-liners fire when nothing
+  else is going on, but they're capped and always lose their GPU slot to
+  an actual player talking to an NPC — dialogue never waits behind flavor
+  text, and nothing the LLM does can stall the game loop (hard timeout +
+  canned fallback on every call).
+- **NPC behavior can improve itself, carefully.** New `decide(state)`
+  skills get proposed, run through validation in a locked-down, networkless
+  container, and only reach live NPCs if they pass — bad candidates get
+  logged and rejected instead of shipped. Facts and personality can update
+  live; actual decision-making code can't sneak in unvalidated.
+
+> 🐄 **Cow note:** all of the above describes the intended in-game
+> experience once `NpcAiBridge.java` is wired into real Hytale NPC event
+> hooks — that wiring, and a live playtest against an actual server, are
+> both still outstanding (see the warning box up top).
+
 ## Layout
 
 ```
