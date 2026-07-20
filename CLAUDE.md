@@ -73,7 +73,14 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
 3. Wire NpcAiBridge.java into the current Hytale plugin API (check current
    docs — API surface moves fast; hytalemodding.dev and the official
    modding posts are the references).
-4. Optional: GitHub Actions workflow running skill_harness.py on push.
+4. ~~Optional: GitHub Actions workflow running skill_harness.py on push.~~
+   **Done** — see `.github/workflows/skill-validation.yml`. Two jobs: a
+   harness self-test against `sandbox/examples/` (one known-good skill that
+   must pass, one deliberately bad one that must fail) that runs on every
+   push/PR touching `sandbox/**`, plus a job that validates anything queued
+   in `sandbox/candidates/*.py`. This is a fast syntax/shape gate only — it
+   does NOT replace `run_skill_validation.sh`'s locked-down Docker sandbox,
+   which is still what actually promotes a skill to `approved/`.
 
 ## Tuning table
 

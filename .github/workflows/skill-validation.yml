@@ -1,0 +1,52 @@
+name: Skill validation
+
+on:
+  push:
+    paths:
+      - "sandbox/**"
+  pull_request:
+    paths:
+      - "sandbox/**"
+
+jobs:
+  harness-self-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Known-good reference skill must pass
+        run: python sandbox/skill_harness.py sandbox/examples/greeter_skill.py
+
+      - name: Known-bad reference skill must fail
+        run: |
+          if python sandbox/skill_harness.py sandbox/examples/bad_skill_disallowed_action.py; then
+            echo "::error::bad_skill_disallowed_action.py should have failed validation but passed"
+            exit 1
+          fi
+          echo "confirmed: disallowed action was correctly rejected"
+
+  validate-candidates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate any queued candidate skills
+        run: |
+          shopt -s nullglob
+          candidates=(sandbox/candidates/*.py)
+          if [ ${#candidates[@]} -eq 0 ]; then
+            echo "no candidates queued, nothing to validate"
+            exit 0
+          fi
+          status=0
+          for skill in "${candidates[@]}"; do
+            echo "=== validating $skill ==="
+            python sandbox/skill_harness.py "$skill" || status=1
+          done
+          exit $status

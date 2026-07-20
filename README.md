@@ -190,3 +190,10 @@ self-improving NPC from becoming a self-sabotaging server.
 > `sandbox/candidates/` isn't built yet — today candidates are added by
 > hand. Watch the sandbox logs before trusting anything it promotes to
 > `approved/`.
+
+CI runs a fast copy of this gate on every push/PR touching `sandbox/**`
+(see [`.github/workflows/skill-validation.yml`](.github/workflows/skill-validation.yml)):
+it checks a known-good and a known-bad reference skill in
+`sandbox/examples/` still pass/fail as expected, then validates anything
+queued in `sandbox/candidates/`. It's a quick shape check only — the real
+gate is still the locked-down Docker sandbox above.

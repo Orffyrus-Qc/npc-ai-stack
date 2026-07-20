@@ -201,3 +201,12 @@ auto-saboteur.
 > alimenter `sandbox/candidates/` n'est pas encore construit — aujourd'hui,
 > les candidates sont ajoutées à la main. Surveillez les logs du bac à sable
 > avant de faire confiance à ce qu'il promeut vers `approved/`.
+
+La CI exécute une version rapide de ce sas à chaque push/PR touchant
+`sandbox/**` (voir
+[`.github/workflows/skill-validation.yml`](.github/workflows/skill-validation.yml)) :
+elle vérifie qu'une compétence de référence correcte et une compétence de
+référence défectueuse dans `sandbox/examples/` réussissent/échouent toujours
+comme prévu, puis valide tout ce qui est en attente dans
+`sandbox/candidates/`. Ce n'est qu'une vérification rapide de forme — le
+vrai sas reste le conteneur Docker verrouillé décrit ci-dessus.
