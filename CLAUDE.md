@@ -13,7 +13,10 @@ Docker stack sharing an **8–12GB VRAM GPU**.
 ## Architecture (and the reasoning behind it)
 
 ```
-Hytale Java plugin (NpcAiBridge.java)
+Hytale Java plugin (hytale-plugin/, Gradle project - see its README)
+  NpcAiBridge.java        transport, zero Hytale imports
+  NpcAiPlugin.java        entry point (extends JavaPlugin)
+  NpcInteractListener.java  PlayerInteractEvent -> the bridge
         │  WebSocket, JSON — protocol documented at top of orchestrator/main.py
         ▼
 orchestrator/ (Python, asyncio)
@@ -52,7 +55,9 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
    `approved/` and must not be given one.
 5. **NpcAiBridge.java stays free of Hytale API imports.** Hytale's NPC/ECS
    plugin APIs were still being renamed across 2026 patches — all game-API
-   coupling belongs in the plugin handler code, not the transport.
+   coupling belongs in the plugin handler code (NpcAiPlugin.java,
+   NpcInteractListener.java), not the transport. Still true as of the
+   2026-07-20 scaffold: NpcAiBridge.java has zero Hytale imports.
 6. Every skill is `decide(state: dict) -> dict` with an action from the
    whitelist in skill_harness.py. Extend the whitelist deliberately.
 
@@ -78,10 +83,24 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
   fastembed's cache dir, unpinned qdrant-client resolved to a version that
   removed `.search()`, and personality.py's record_outcome() had an
   asyncpg-unparseable unbound placeholder. All fixed; see git log.
-- NOT yet done: sustained multi-player/multi-NPC load test; wiring
-  NpcAiBridge into current Hytale NPC event hooks; any run against a real
-  Hytale server or client; skill_writer.py against the real GPU (only
-  verified with a fake LLM/DB so far).
+- **2026-07-20, same day: hytale-plugin/ scaffold added.** User installed
+  Hytale; the real `HytaleServer.jar` (v0.5.7) was found on disk and
+  inspected directly (constant-pool dump, no javap/JDK available) to
+  ground every class/method name used in NpcAiPlugin.java and
+  NpcInteractListener.java in bytecode that actually exists, instead of
+  guessing from docs. Confirmed real: manifest.json shape, JavaPlugin/
+  setup() lifecycle, EventRegistry.registerGlobal(), PlayerInteractEvent's
+  fields, INonPlayerCharacter as the (non-deprecated) NPC marker. Two
+  things explicitly flagged as unverified in hytale-plugin/README.md: the
+  thread-hop needed before the bridge's reply callback touches world
+  state, and multi-turn chat-based conversation (needs PlayerChatEvent,
+  which is IAsyncEvent-based - a different registration shape than what
+  got used). **None of this has been compiled** - no JDK 25 in this
+  environment. First next step is getting it to compile.
+- NOT yet done: getting hytale-plugin/ to actually compile; sustained
+  multi-player/multi-NPC load test; any run against a real Hytale server
+  or client; skill_writer.py against the real GPU (only verified with a
+  fake LLM/DB so far).
 
 ## Agreed next steps (in order)
 
@@ -100,9 +119,12 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
    it must only run during confirmed low-player windows, same as
    `run_skill_validation.sh`.
 2. Load-test llama.cpp slots on the real GPU; tune --parallel/ctx tradeoff.
-3. Wire NpcAiBridge.java into the current Hytale plugin API (check current
-   docs — API surface moves fast; hytalemodding.dev and the official
-   modding posts are the references).
+3. **In progress** — Wire NpcAiBridge.java into the current Hytale plugin
+   API. `hytale-plugin/` now exists with a bytecode-verified-but-uncompiled
+   first draft (see above and hytale-plugin/README.md). Remaining: get a
+   JDK 25, compile it, fix whatever the compiler catches, confirm the
+   thread-hop for touching world state, add PlayerChatEvent for real
+   conversations, test in an actual singleplayer world.
 4. ~~Optional: GitHub Actions workflow running skill_harness.py on push.~~
    **Done** — see `.github/workflows/skill-validation.yml`. Two jobs: a
    harness self-test against `sandbox/examples/` (one known-good skill that

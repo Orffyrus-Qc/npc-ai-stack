@@ -91,6 +91,18 @@ against real plugin APIs, sustained multi-NPC load, or `skill_writer.py`
 against the real GPU (it was only verified with a fake LLM/DB — see
 [the skill self-improvement section](#the-skill-writer-meta-agent)).
 
+### 🐄 A different kind of "verified": the Hytale plugin scaffold
+
+[`hytale-plugin/`](hytale-plugin/) (added 2026-07-20) is a different
+situation from the rest of this section — every class/method it calls was
+confirmed to actually exist by inspecting the bytecode of a real installed
+`HytaleServer.jar` (v0.5.7), not guessed from docs. That's stronger than a
+guess, but **it has never been compiled** — no JDK 25 was available in the
+environment that wrote it. Read [`hytale-plugin/README.md`](hytale-plugin/README.md)
+before trusting any of it; it tracks exactly which pieces are bytecode-verified
+vs. still-a-placeholder (notably: the thread-hop for touching world state
+from the bridge's callback, and multi-turn chat-based conversation).
+
 ---
 
 # NPC AI Stack — single machine, 8–12GB GPU
@@ -160,11 +172,16 @@ orchestrator/
   llm_client.py             prompt builder (personality+memory -> system prompt) + llama.cpp client
   memory.py                 Qdrant episodic + Postgres semantic facts + compression
   personality.py            bounded trait nudges, per-player trust, decay to baseline
+  skill_writer.py           offline meta-agent: outcome history -> candidate skills
 sandbox/
   run_skill_validation.sh   ephemeral locked-down containers for candidate skills
   skill_harness.py          the tests a skill must pass to be promoted
 scripts/download_model.sh   fetch Qwen2.5-7B-Instruct GGUF
-NpcAiBridge.java            plugin-side transport (no Hytale API coupling)
+hytale-plugin/               Gradle project - see hytale-plugin/README.md
+  src/main/java/com/orffyrus/npcai/
+    NpcAiBridge.java        plugin-side transport (no Hytale API coupling)
+    NpcAiPlugin.java        entry point (extends JavaPlugin)
+    NpcInteractListener.java  wires PlayerInteractEvent -> the bridge
 ```
 
 ## Bring-up

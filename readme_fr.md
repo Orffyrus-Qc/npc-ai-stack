@@ -95,6 +95,20 @@ face aux vraies API du plugin, une charge multi-PNJ soutenue, ou
 `skill_writer.py` face au vrai GPU (vérifié seulement avec un faux LLM/BDD —
 voir [la section sur le méta-agent rédacteur de compétences](#le-méta-agent-rédacteur-de-compétences)).
 
+### 🐄 Un autre genre de « vérifié » : l'ébauche du plugin Hytale
+
+[`hytale-plugin/`](hytale-plugin/) (ajouté le 2026-07-20) est un cas différent
+du reste de cette section : chaque classe/méthode utilisée a été confirmée
+réelle en inspectant le bytecode d'un vrai `HytaleServer.jar` installé
+(v0.5.7), pas devinée depuis la documentation. C'est plus solide qu'une
+supposition, mais **ça n'a jamais été compilé** — aucun JDK 25 n'était
+disponible dans l'environnement qui l'a écrit. Lisez
+[`hytale-plugin/README.md`](hytale-plugin/README.md) avant de faire
+confiance à quoi que ce soit ici ; il liste précisément ce qui est vérifié
+par bytecode contre ce qui reste un placeholder (notamment : le changement
+de thread avant de toucher l'état du monde depuis le callback du bridge, et
+la conversation multi-tours basée sur le chat).
+
 ---
 
 # Stack IA de PNJ — une seule machine, GPU 8–12 Go
@@ -173,11 +187,16 @@ orchestrator/
   llm_client.py             constructeur de prompt (personnalité+mémoire -> prompt système) + client llama.cpp
   memory.py                 épisodique Qdrant + faits sémantiques Postgres + compression
   personality.py             ajustements de traits bornés, confiance par joueur, retour à la base
+  skill_writer.py           méta-agent hors-ligne : historique de résultats -> compétences candidates
 sandbox/
   run_skill_validation.sh   conteneurs éphémères verrouillés pour les compétences candidates
   skill_harness.py          les tests qu'une compétence doit réussir pour être promue
 scripts/download_model.sh   récupère le GGUF de Qwen2.5-7B-Instruct
-NpcAiBridge.java            transport côté plugin (aucun couplage à l'API Hytale)
+hytale-plugin/               projet Gradle - voir hytale-plugin/README.md
+  src/main/java/com/orffyrus/npcai/
+    NpcAiBridge.java        transport côté plugin (aucun couplage à l'API Hytale)
+    NpcAiPlugin.java        point d'entrée (extends JavaPlugin)
+    NpcInteractListener.java  relie PlayerInteractEvent au bridge
 ```
 
 ## Mise en route

@@ -1,12 +1,14 @@
+package com.orffyrus.npcai;
+
 /**
  * Hytale plugin side of the bridge - minimal async WebSocket client.
  *
  * NOTE: Hytale's plugin API surface is still shifting during 2026 (the
  * changelogs list NPC/ECS renames), so this file deliberately contains
- * ZERO Hytale-specific imports. It's the transport layer only. You wire
- * sendDialogue()/sendAmbient()/sendOutcome() into whatever the current
- * NPC event hooks look like in your plugin, and handle "say" responses
- * by applying them to the entity (chat bubble, dialogue UI, etc).
+ * ZERO Hytale-specific imports. It's the transport layer only. NpcAiPlugin
+ * wires sendDialogue()/sendAmbient()/sendOutcome() into the actual NPC
+ * event hooks, and handles "say" responses by applying them to the entity
+ * (chat bubble, dialogue UI, etc).
  *
  * Uses java.net.http.WebSocket (JDK 11+) - no extra dependencies.
  */

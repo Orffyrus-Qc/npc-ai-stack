@@ -1,0 +1,17 @@
+{
+    "Group": "com.orffyrus",
+    "Name": "NpcAiStack",
+    "Version": "0.1.0",
+    "Description": "LLM-driven NPC dialogue, memory, and evolving personality - bridges to the npc-ai-stack Docker orchestrator over WebSocket.",
+    "Authors": [
+        {
+            "Name": "orffyrus"
+        }
+    ],
+    "ServerVersion": "*",
+    "Dependencies": {},
+    "OptionalDependencies": {},
+    "DisabledByDefault": false,
+    "Main": "com.orffyrus.npcai.NpcAiPlugin",
+    "IncludesAssetPack": false
+}
