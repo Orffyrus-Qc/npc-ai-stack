@@ -28,6 +28,22 @@ Getting here took three real, live-tested fixes, in order:
    wave animation after a delay) had been dropped while simplifying the
    role JSON from the original `Kweebec_Merchant.json`. Restored verbatim.
 
+**2026-07-21 postscript:** the "stuck running in place" symptom above came
+back on a later spawn, on a *different* world (`NPC_TESTS`), even with the
+verbatim-restored `Instructions` block confirmed byte-identical in the
+installed jar - real regression suspected. Investigated via the actual
+Hytale server/client logs (`UserData/Saves/<world>/logs/*.log`,
+`UserData/Logs/*_client.log`), not just the local `runServer` boot test:
+no error or warning anywhere tied to the `AI_Talker` entity, and the one
+animation-related log line found (`No animation with id Spawn on entity
+with model ... Kweebec_Rootling.blockymodel`) turned out to be harmless,
+pre-existing noise present in every session log back to 2026-07-20,
+including the confirmed-working ones - so not the cause. Spawning in a
+flat creative world instead confirmed the NPC is fine. **Root cause:
+terrain under the spawn point in that particular world, not the plugin,
+the role JSON, or the jar.** No code fix needed; noting here since the
+symptom is easy to mistake for the JSON regression above.
+
 ## 2026-07-21: reply-not-arriving bug found and fixed (stale `PlayerRef`)
 
 After the chat listener above was confirmed to correctly intercept and cancel
