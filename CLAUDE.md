@@ -16,16 +16,23 @@ Docker stack sharing an **8–12GB VRAM GPU**.
 Hytale Java plugin (hytale-plugin/, Gradle project - see its README)
   NpcAiBridge.java        transport, zero Hytale imports
   NpcAiPlugin.java        entry point (extends JavaPlugin)
-  NpcInteractListener.java  PlayerInteractEvent -> the bridge
+  TalkToAIAction.java / PlayerChatToAIListener.java  the real hooks into the
+                     bridge (NpcInteractListener.java was deleted 2026-07-21 -
+                     confirmed dead code, see "State when handed off" below)
         │  WebSocket, JSON — protocol documented at top of orchestrator/main.py
         ▼
 orchestrator/ (Python, asyncio)
   main.py            gateway + handlers + offline compression daemon
   priority_queue.py  GPU slot arbiter (see "hard rules" below)
-  llm_client.py      personality+memory → system prompt; llama.cpp client
+  llm_client.py      personality+memory → system prompt; llama.cpp client;
+                     dialogue() also gets a TONE self-report (kind/rude/
+                     neutral) from the model on every real turn, zero extra
+                     GPU cost - see "Agreed next steps" below
   memory.py          Qdrant episodic + Postgres semantic facts + compression
   personality.py     bounded trait nudges, per-player trust, decay to baseline,
                      outcome history log (npc_outcome_log)
+  skill_runtime.py   loads sandbox/approved/ skills and runs them for
+                     ambient/idle ticks, isolated per-call subprocess
   skill_writer.py    OFFLINE meta-agent: outcome history + rejected/*.log ->
                      candidate skills. Not started by `docker compose up`
                      (profile "tools") - never touches approved/ directly.
@@ -241,6 +248,63 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
    Still a fast gate only, same as before - it does NOT replace
    `run_skill_validation.sh`, which is still what actually promotes a skill
    to `approved/`.
+6. ~~Real outcome data never reached personality.py/skill_writer.py from
+   actual gameplay.~~ **Mostly done, 2026-07-21** - see the section below.
+   `player_was_kind`/`player_was_rude` are now inferred straight from every
+   real dialogue turn (zero new Java code). Still open, tracked separately:
+   `player_attacked_npc` needs a genuine new Java/ECS integration
+   (`DamageEventSystem`, not the Sensor/Action extension point everything
+   else here uses) that wants live-client verification this environment
+   doesn't have; `player_gave_gift`/`player_helped_quest`/`joke_landed`/
+   `player_shared_news` need game systems (inventory, quests) that don't
+   exist at all yet.
+
+## 2026-07-21, later: real outcome data now flows from actual gameplay
+
+Investigated task "wire sendOutcome from the Java plugin" and found the
+straightforward version of that task doesn't have a clean answer: unlike
+every other game mechanic this plugin integrates with (TalkToAI ~ shipped
+OpenBarterShop, NoteNearbyThreat ~ Trork's own Mob/Attitude sensor,
+SeekLandmark ~ `/locate zone`), there is NO existing high-level Sensor/
+Condition JSON anywhere in the shipped game for "this NPC just took
+damage" - confirmed by cataloguing every Sensor/Action `Type` used across
+Trork's own Panic/Alerted/Reputation_Switch instruction JSON in
+`Assets.zip`: Attitude/LineOfSight/Mob/Player/Target/Timeout/Timer/Watch/
+etc, nothing damage-related. Hostile mobs are hostile by proximity/
+attitude, not by reacting to being hit - there's no "under attack" reflex
+to copy. The real hook is one layer deeper: `DamageEventSystem` (confirmed
+via `javap` against the real `HytaleServer.jar`) is a raw ECS
+`EntityEventSystem<EntityStore, Damage>` subclass - a fundamentally
+different, higher-risk integration than the `NPCPlugin.
+registerCoreComponentType()` extension point everything else in this
+plugin uses, and not something to wire blindly without a live client to
+verify against (this session's environment is backend-only). Deferred as
+its own tracked task (see "Agreed next steps" #4) rather than rushed.
+
+Instead, fixed the actual underlying problem a different way: confirmed via
+direct DB inspection that `npc_outcome_log` had zero real rows for any
+actual live NPC (only stale test fixtures), which meant `personality.py`'s
+trait evolution and `skill_writer.py`'s own trigger condition
+(`recent_outcome_counts`) were both completely inert for real gameplay -
+only reachable via manual test data. `sendOutcome`'s wire message was never
+the only possible source of outcome data: the orchestrator already runs one
+LLM call per dialogue turn with full context on how the player just spoke
+to the NPC, so `llm_client.py`'s `dialogue()` now also asks for a `TONE:
+KIND`/`TONE: RUDE`/`TONE: NEUTRAL` self-report on the SAME completion
+(parsed the same tolerant way as the existing `ACTION` tag - no extra GPU
+cost, no new Java code). `main.py`'s `handle_dialogue` maps kind/rude to
+`player_was_kind`/`player_was_rude` outcomes (neutral records nothing, on
+purpose - most turns are just conversation, not an evaluable event).
+Verified live end-to-end: real kind/rude/neutral messages through a real
+WebSocket connection to the running orchestrator correctly produced (or
+correctly withheld) real rows in `npc_outcome_log`, and real trait nudges
+in `npc_personality` - confirmed by direct Postgres inspection, then
+cleaned up the test data.
+
+This does NOT cover `player_attacked_npc`, `player_gave_gift`,
+`player_helped_quest`, `joke_landed`, or `player_shared_news` - the last
+three also need game systems (inventory, quests) that don't exist yet at
+all, and the first needs the deferred Java/ECS work above.
 
 ## 2026-07-21 audit pass, approved/ wired up, then a real GPU load test
 

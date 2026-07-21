@@ -127,6 +127,11 @@ DEFAULT_BASELINES: dict[str, Personality] = {
 }
 FALLBACK_BASELINE = Personality()
 
+# Maps llm_client.VALID_TONES (the model's own per-turn judgment) to
+# personality.OUTCOME_EFFECTS keys - see handle_dialogue()'s comment for why
+# this exists at all. "neutral" is deliberately absent: no outcome recorded.
+TONE_TO_OUTCOME = {"kind": "player_was_kind", "rude": "player_was_rude"}
+
 
 async def _build_context(msg: dict) -> NPCContext:
     npc_id, player_id = msg["npc_id"], msg.get("player_id", "")
@@ -174,12 +179,13 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
         ctx.npc_id, lambda: LLM.dialogue(ctx, msg["text"])
     )
     if isinstance(raw, DialogueResult):
-        text, action = raw.text, raw.action
+        text, action, tone = raw.text, raw.action, raw.tone
     else:
         # The dispatcher fell back to its generic "..." string sentinel
         # (GPU busy / call timed out / call raised) instead of running
-        # LLM.dialogue() - the NPC just visibly "pauses", no action decided.
-        text, action = raw, "none"
+        # LLM.dialogue() - the NPC just visibly "pauses", no action decided,
+        # and there's no real reply to judge tone from either.
+        text, action, tone = raw, "none", "neutral"
 
     if action == "accept_tame":
         player_id = msg.get("player_id", "")
@@ -206,8 +212,8 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
         # slip, not a real request to react to in the reply).
         action = "none"
 
-    logger.info("npc %s (player %s): action=%s is_companion=%s",
-                ctx.npc_id, msg.get("player_id", ""), action, ctx.is_companion)
+    logger.info("npc %s (player %s): action=%s tone=%s is_companion=%s",
+                ctx.npc_id, msg.get("player_id", ""), action, tone, ctx.is_companion)
 
     # Remember the exchange (fire-and-forget so we don't add latency)
     _spawn(MEMORY.remember_episode(EpisodicEntry(
@@ -216,6 +222,23 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
         text=f'Player said: "{msg["text"][:200]}". I replied: "{text[:200]}"',
         ts=time.time(),
     )))
+
+    # Real outcome detection, inferred from the exchange itself rather than
+    # a new Java-side game hook (see CLAUDE.md/task tracking for why:
+    # NpcAiBridge.sendOutcome() still has no caller anywhere in the plugin,
+    # so this is currently the ONLY source of real outcome data - without
+    # it, personality.py's trait evolution and skill_writer.py's own trigger
+    # condition (recent_outcome_counts) are both inert for every real NPC).
+    # "neutral" records nothing on purpose - most turns are just ordinary
+    # conversation, and treating every single one as an evaluable event
+    # would flood npc_outcome_log with noise. Zero extra GPU cost: TONE
+    # rides on the same completion as ACTION (see llm_client.py), not a
+    # second call.
+    outcome = TONE_TO_OUTCOME.get(tone)
+    player_id = msg.get("player_id", "")
+    if outcome and player_id:
+        baseline = DEFAULT_BASELINES.get(msg.get("npc_role", ""), FALLBACK_BASELINE)
+        _spawn(PERSONALITY.record_outcome(ctx.npc_id, player_id, outcome, baseline))
     # ctx.is_companion is re-checked fresh (Postgres-backed via taming.py,
     # not the plugin's own ephemeral CompanionState) and returned on every
     # single turn - see the wire-send comment in plugin_connection() for why

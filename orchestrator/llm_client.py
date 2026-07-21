@@ -77,11 +77,23 @@ class NPCContext:
 # model's raw output has to be validated defensively anyway.
 VALID_ACTIONS = {"none", "offer_guide", "offer_fight", "decline_guide", "accept_tame", "open_shop"}
 
+# Valid values for the TONE tag - see build_dialogue_messages()'s TONE rule.
+# Deliberately named "tone" here, distinct from the wire-protocol/
+# personality.py sense of "outcome" (player_was_kind/player_was_rude/etc,
+# see main.py's handle_dialogue) - this is the raw per-turn signal the model
+# reports; main.py decides whether/how to turn "kind"/"rude" into an actual
+# recorded outcome. Not every tone maps to an outcome - "neutral" records
+# nothing, on purpose (most exchanges are just ordinary conversation, and
+# treating every single turn as an evaluable event would flood
+# npc_outcome_log with noise and nudge personality on pure small talk).
+VALID_TONES = {"kind", "rude", "neutral"}
+
 
 @dataclass
 class DialogueResult:
     text: str                    # the in-character spoken line only
     action: str = "none"         # one of VALID_ACTIONS - see main.py for handling
+    tone: str = "neutral"        # one of VALID_TONES - see main.py for handling
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +162,14 @@ you want to do next: "ACTION: NONE", "ACTION: OFFER_GUIDE", "ACTION: OFFER_FIGHT
 "ACTION: DECLINE_GUIDE", "ACTION: ACCEPT_TAME", or "ACTION: OPEN_SHOP". These only \
 apply if the player just asked you to lead them somewhere, help against a threat, \
 become their tamed companion, or see your wares/trade - otherwise always use NONE.
+- Also output a second tag, on its own line, judging how the player treated \
+YOU personally in THIS message only (not their history, not the world) - \
+"TONE: KIND", "TONE: RUDE", or "TONE: NEUTRAL". KIND means real warmth, \
+gratitude, a compliment, or a genuinely thoughtful gesture aimed at you. RUDE \
+means insults, mockery, threats, or dismissiveness aimed at you. Ordinary \
+conversation, questions, requests, or small talk - even blunt or curt ones - \
+are NEUTRAL; reserve KIND/RUDE for messages where the player's tone toward \
+you personally is actually unmistakable, not just "not perfectly polite".
 - If asked to help against a hostile creature (including one mentioned in your \
 current situation below) or to lead the player somewhere: decide for yourself, \
 weighing your own courage/aggression, your trust in this player, and your role \
@@ -234,18 +254,21 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
 
 
 _ACTION_TAG_RE = re.compile(r"\s*ACTION:\s*([A-Z_]+)\.?", re.IGNORECASE)
+_TONE_TAG_RE = re.compile(r"\s*TONE:\s*([A-Z_]+)\.?", re.IGNORECASE)
 
 
 def _parse_dialogue_response(raw: str) -> DialogueResult:
     """
-    Extracts the ACTION tag (see SYSTEM_TEMPLATE) and strips it back out of
-    the spoken text. Live testing against the real model showed it reliably
-    appends "ACTION: X" to the END OF THE SAME LINE as the spoken text
-    rather than a separate line as instructed (worse, on ambient calls with
-    a "\\n" stop token it sometimes emitted *only* the tag, no spoken text
-    at all) - so this can't assume line position. A regex substitution
-    anywhere in the raw text is robust to both cases; a missing/garbled tag
-    just falls back to action="none" without affecting the spoken text.
+    Extracts the ACTION and TONE tags (see SYSTEM_TEMPLATE) and strips them
+    back out of the spoken text. Live testing against the real model showed
+    it reliably appends "ACTION: X" to the END OF THE SAME LINE as the
+    spoken text rather than a separate line as instructed (worse, on
+    ambient calls with a "\\n" stop token it sometimes emitted *only* the
+    tag, no spoken text at all) - so this can't assume line position. A
+    regex substitution anywhere in the raw text is robust to both cases;
+    the same treatment applies to TONE, added later - a missing/garbled tag
+    just falls back to its default (action="none", tone="neutral") without
+    affecting the spoken text.
     """
     action = "none"
     m = _ACTION_TAG_RE.search(raw)
@@ -253,8 +276,15 @@ def _parse_dialogue_response(raw: str) -> DialogueResult:
         candidate = m.group(1).strip().lower()
         if candidate in VALID_ACTIONS:
             action = candidate
-    text = _ACTION_TAG_RE.sub("", raw).strip().strip('"').strip()
-    return DialogueResult(text=text, action=action)
+    tone = "neutral"
+    m = _TONE_TAG_RE.search(raw)
+    if m:
+        candidate = m.group(1).strip().lower()
+        if candidate in VALID_TONES:
+            tone = candidate
+    text = _ACTION_TAG_RE.sub("", raw)
+    text = _TONE_TAG_RE.sub("", text).strip().strip('"').strip()
+    return DialogueResult(text=text, action=action, tone=tone)
 
 
 # ---------------------------------------------------------------------------
@@ -301,8 +331,10 @@ class LlamaClient:
 
     async def dialogue(self, ctx: NPCContext, player_utterance: str) -> DialogueResult:
         # No "\n" stop here (unlike the old single-line version) - the model
-        # needs a second line free for the ACTION tag. max_tokens bumped
-        # accordingly; still tight enough to protect slot throughput.
+        # needs two lines free now: the ACTION tag plus the TONE tag added
+        # later (see SYSTEM_TEMPLATE and main.py's use of .tone for outcome
+        # inference). max_tokens bumped accordingly; still tight enough to
+        # protect slot throughput.
         #
         # repeat_penalty/presence_penalty added after live testing showed
         # NPCs reliably repeating the exact same greeting/offer line verbatim
@@ -315,7 +347,7 @@ class LlamaClient:
         # memory recall doesn't surface a matching past line.
         raw = await self.complete(
             build_dialogue_messages(ctx, player_utterance),
-            max_tokens=110,
+            max_tokens=130,
             temperature=0.8,
             repeat_penalty=1.15,
             presence_penalty=0.4,
