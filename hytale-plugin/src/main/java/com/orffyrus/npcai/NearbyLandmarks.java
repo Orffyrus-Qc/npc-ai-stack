@@ -94,7 +94,18 @@ public final class NearbyLandmarks {
         if (!(gen instanceof ChunkGenerator cg)) return "";
 
         Vector3d pos = tc.getPosition();
-        int x = (int) pos.x, y = (int) pos.y, z = (int) pos.z;
+        int x = (int) pos.x, z = (int) pos.z;
+        // SpiralSearchUtil.search()'s real signature (confirmed via
+        // disassembly of the real, shipped LocateZoneCommand/
+        // AbstractLocateSubcommand) is (ChunkGenerator, int seed, int x,
+        // int z, int radius, Predicate) - a pure 2D search, NOT (x, y, z,
+        // radius) as it's easy to assume from the call shape alone. Passing
+        // the NPC's real Y in the "seed" slot and Y/Z as the search origin
+        // (an earlier version of this method's bug) silently searched near
+        // world origin (0, ~playerY, ~playerZ) instead of near the NPC,
+        // producing wildly wrong "nearest landmark" coordinates that still
+        // happened to sound plausible as flavor text.
+        int seed = (int) world.getWorldConfig().getSeed();
 
         Zone[] zones = cg.getZonePatternProvider().getZones();
         List<String> found = new ArrayList<>();
@@ -116,7 +127,7 @@ public final class NearbyLandmarks {
             if (displayName == null || displayName.isEmpty()) {
                 displayName = zoneName;
             }
-            Vector3i hit = SpiralSearchUtil.search(cg, x, y, z, SEARCH_RADIUS,
+            Vector3i hit = SpiralSearchUtil.search(cg, seed, x, z, SEARCH_RADIUS,
                     zbr -> {
                         ZoneGeneratorResult zr = zbr.getZoneResult();
                         return zr != null && zr.getZone() != null && zoneName.equals(zr.getZone().name());
@@ -127,7 +138,11 @@ public final class NearbyLandmarks {
                 String key = distance + "|" + prettify(displayName) + " to the " + compassDirection(dx, dz)
                         + " (~" + distance + " blocks)";
                 found.add(key);
-                hitByDescription.put(key, hit);
+                // search() always returns y=0 (it's a pure 2D X/Z search) -
+                // resolve a real ground height for the coordinate we'll
+                // actually walk the NPC toward, via the same ChunkGenerator/
+                // seed convention.
+                hitByDescription.put(key, new Vector3i(hit.x, cg.getHeight(seed, hit.x, hit.z), hit.z));
             }
         }
         if (found.isEmpty()) return "";
