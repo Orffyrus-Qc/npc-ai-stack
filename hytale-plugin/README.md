@@ -60,6 +60,24 @@ actually said. Real combat itself is still boot-tested only as of this
 section - none of the live test sessions so far happened near a hostile
 creature.
 
+**2026-07-21: reactive defense added** (requested: "npc must fight with me
+if I am attacked"). The Mob+Attitude sensor above only reacts to a hostile
+this companion can already see/sense itself - if something attacks the
+player from outside the companion's own detection, it wouldn't previously
+notice at all. Added a second, real, shipped sensor - `"Type":
+"EntityEvent"` (`EventType: Damage`, `SearchType: PlayerOnly`, `NPCGroup:
+Player`) - confirmed via disassembly of `SensorEntityEvent`/
+`BuilderSensorEntityEvent` and via its real usage in
+`Component_Instruction_Allied_Damage_Check.json`. It fires the instant the
+followed player takes damage nearby, regardless of the companion's own line
+of sight, combined with the same hostile search widened to 45 blocks (vs.
+the normal 30) since a threat is now known to be imminent. **Boot-tested
+clean** (zero validation errors); **not yet live-confirmed** - same caveat
+as the combat system it extends, no live test session has happened near a
+real hostile yet. Adventurer-only for now (the archetype where physical
+combat fits the character) - Elder_Miri/Merchant_Oskar remain non-combat
+companions by design, matching their low-aggression personas.
+
 ## 2026-07-21: NPCs can actually lead you to a landmark, not just describe it
 
 Requested: once an NPC follows the player, the next step is for it to be
@@ -639,6 +657,7 @@ the NPC-talk mechanism - kept only in case it's useful for something else.
 | Thread-hop before `sendMessage()` in the reply callback | Reasoned-not-verified: `PlayerRef.sendMessage()` is used elsewhere from async command handlers in this codebase, so it's likely cross-thread-safe, but this is inference, not a confirmed guarantee. No entity/world-state mutation happens in the callback (kept deliberately narrow because of this). Not observed to be an issue across live testing so far. |
 | Multi-turn conversation (`PlayerChatEvent`) | **Confirmed live** — typing after the first click continues the conversation with real text, visually tagged replies |
 | `NoteAttackedByPlayer` action + `"Damage"` sensor (`Combat: true`) reports `player_attacked_npc` to the orchestrator | Real, shipped Sensor Type - confirmed via disassembly of `SensorDamage`/`BuilderSensorDamage` AND via its real usage in `Server/NPC/Roles/_Core/Components/Steps/Component_Instruction_Damage_Check.json` (the neutral Kweebec's own Panic trigger), added to all 4 role JSONs 2026-07-21. **Boot-tested clean** (`./gradlew runServer` validates and boots with zero errors attributable to it) - **not yet confirmed against a real attack**. All 4 roles set `Invulnerable: true`; grounded in `DamageSystems$PlayerDamageFilterSystem`'s own pattern (cancels damage via a flag on an event that still fires, rather than suppressing the event outright) that the Damage sensor should still match regardless, but that's inference from disassembly, not a live hit. To verify: spawn any of the 4 roles, attack it, and check the orchestrator log for `npc <id> (player <id>): outcome=player_attacked_npc` (added 2026-07-21 - `handle_outcome()` previously only logged its failure paths, so a successfully recorded outcome was invisible in the log) plus a new row in Postgres `npc_outcome_log`. |
+| Reactive companion defense - `"EntityEvent"` sensor (`EventType: Damage`, `SearchType: PlayerOnly`) makes a tamed Adventurer companion react to the PLAYER being hit, not just a hostile it can already see | Real, shipped Sensor Type - confirmed via disassembly of `SensorEntityEvent`/`BuilderSensorEntityEvent` AND via its real usage in `Component_Instruction_Allied_Damage_Check.json`, added 2026-07-21 (requested: "npc must fight with me if I am attacked"). **Boot-tested clean** - **not yet live-confirmed**, same caveat as the companion-combat system it extends (see above: no live session has happened near a real hostile yet). |
 
 ## How to actually test this (needs a real client - can't be done from here)
 

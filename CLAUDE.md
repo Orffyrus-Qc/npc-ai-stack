@@ -380,6 +380,53 @@ should still match regardless, that's inference, not a live hit. See
 hytale-plugin/README.md's verification table for how to confirm this
 firmly with a real client.
 
+## 2026-07-21, later still: reactive companion defense ("fight with me if I am attacked")
+
+Requested: the tamed companion should fight alongside the player when the
+player is attacked, not just when the companion happens to notice a
+hostile on its own. The existing companion-combat sensor (`Adventurer.json`'s
+Mob+Attitude block, `Range: 30`) is purely proactive - it only reacts to a
+hostile the companion can already see/sense itself, which could miss an
+attacker that's engaging the player specifically from outside the
+companion's own detection.
+
+Added a second, real, shipped sensor: `{"Type": "EntityEvent", "EventType":
+"Damage", "NPCGroup": "Player", "SearchType": "PlayerOnly"}` - confirmed via
+disassembly of `SensorEntityEvent`/`BuilderSensorEntityEvent`
+(`com.hypixel.hytale.server.npc.corecomponents.world`) and via its real
+usage in `Server/NPC/Roles/_Core/Components/Steps/
+Component_Instruction_Allied_Damage_Check.json`. `EventSearchType` has four
+real values (`PlayerFirst`/`PlayerOnly`/`NpcFirst`/`NpcOnly`) -
+`PlayerOnly` matches only when a nearby player takes damage, ignoring NPCs
+entirely. `NPCGroup` is a required field even for player-only search
+(bytecode-confirmed via `TagSetExistsValidator.required()`) - satisfied
+with the real, shipped `"Player"` NPCGroup asset
+(`Server/NPC/Groups/Player.json` = `{"IncludeRoles": ["$player"]}`).
+
+Combined this trigger with the *same* Mob+Attitude hostile search already
+used for proactive detection, just widened to 45 blocks (from 30) - once we
+know for certain the player was just hit nearby, it's worth searching
+harder for whatever did it. Added only to `Adventurer.json`, the one
+archetype where physical combat fits the character
+(`aggression=0.5`, "bold and quick to trust") - `Elder_Miri`/`Merchant_Oskar`
+stay non-combat companions by design, matching their low-aggression
+personas (`0.05`/`0.15`) and the LLM's own `OFFER_FIGHT` reasoning ("only
+pick OFFER_FIGHT if you're genuinely someone who stands and fights").
+
+Confirmed real combat itself is driven entirely by this passive
+IsCompanion+Target detection, independent of the LLM's own `OFFER_FIGHT`
+dialogue decision (`main.py`'s wire-protocol docstring already documents
+this: "offer_fight"/"decline_guide" are informational only) - so this
+addition slots into the existing architecture rather than needing any new
+wiring between dialogue and combat.
+
+**Boot-tested clean** (`./gradlew runServer` validates and boots with zero
+errors attributable to the new sensor block, `Loaded 977 NPC configurations,
+Generic: 4`) - **not yet live-confirmed**, same caveat as the
+companion-combat system it extends (see hytale-plugin/README.md's "Known
+simplification" - no live test session so far has happened near a real
+hostile creature).
+
 ## 2026-07-21 audit pass, approved/ wired up, then a real GPU load test
 
 Asked to deep-audit the whole project (not chasing one symptom), fix what's

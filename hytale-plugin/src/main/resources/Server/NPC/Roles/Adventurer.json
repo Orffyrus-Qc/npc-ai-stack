@@ -110,6 +110,39 @@
               ]
             },
             {
+              "$Comment": "Reactive companion defense: real, shipped 'EntityEvent' sensor (EventType: Damage, SearchType: PlayerOnly, NPCGroup: Player - confirmed valid asset at Server/NPC/Groups/Player.json) - confirmed via disassembly of SensorEntityEvent/BuilderSensorEntityEvent AND via its real usage in Server/NPC/Roles/_Core/Components/Steps/Component_Instruction_Allied_Damage_Check.json. Fires the instant a nearby player (the one this NPC is following) takes damage, regardless of whether THIS companion currently has line of sight on whatever's hitting them - the Mob+Attitude sensor above only reacts to a hostile the companion can already see/sense itself, which could miss an attacker sneaking up on the player specifically. Combined here with the same Mob+Attitude hostile search, just widened to 45 blocks (vs. the normal 30) - we now know for certain a threat is imminent nearby, so it's worth searching harder for it. Not yet live-confirmed (this whole companion-combat feature has never been tested near a real hostile creature - see hytale-plugin/README.md's \"Known simplification\").",
+              "Continue": true,
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "EntityEvent",
+                    "Range": 20,
+                    "EventType": "Damage",
+                    "NPCGroup": "Player",
+                    "SearchType": "PlayerOnly"
+                  },
+                  {
+                    "Type": "Mob",
+                    "Range": 45,
+                    "GetPlayers": false,
+                    "GetNPCs": true,
+                    "LockOnTarget": true,
+                    "Prioritiser": {
+                      "Type": "Attitude",
+                      "AttitudesByPriority": [ "Hostile" ]
+                    }
+                  }
+                ]
+              },
+              "Actions": [
+                {
+                  "Type": "NoteNearbyThreat"
+                }
+              ]
+            },
+            {
               "$Comment": "Real, shipped 'Damage' sensor Type (Combat: true) - confirmed via disassembly of SensorDamage/BuilderSensorDamage AND via its real usage in Server/NPC/Roles/_Core/Components/Steps/Component_Instruction_Damage_Check.json (the neutral Kweebec's own Panic trigger). Reports a player physically attacking this NPC as a real outcome (personality.py's player_attacked_npc) - see NoteAttackedByPlayerAction.java. Not yet live-confirmed against a real attack (this NPC role sets Invulnerable:true; grounded in PlayerDamageFilterSystem's own pattern of cancelling damage via a flag on an event that still fires, rather than suppressing the event entirely, but that's inference from disassembly, not a live test).",
               "Continue": true,
               "Sensor": {
