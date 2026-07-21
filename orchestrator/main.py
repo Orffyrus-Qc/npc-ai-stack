@@ -89,10 +89,21 @@ def _spawn(coro) -> asyncio.Task:
     return task
 
 
-# Match llama.cpp --parallel. One slot is implicitly kept honest for
-# compression jobs by the ambient_max_in_flight cap.
+# Match llama.cpp --parallel (docker-compose.yml's llm-inference command) -
+# 2026-07-21 real load test on the RTX 3060: --parallel 6 / --ctx-size 12288
+# (still 2048 tokens/slot, same per-slot budget as before) beat the previous
+# --parallel 4 / --ctx-size 8192 at every concurrency level tested (better
+# p50/p95 latency, ~25% higher peak throughput) for +227MB VRAM. Pushing to
+# --parallel 8 / --ctx-size 16384 didn't move the throughput ceiling
+# (~4.5-4.9 req/s either way - this GPU's real compute ceiling for this
+# model, not a slot-count limit) and made latency noisier, so 6 is the
+# chosen point, not just "the biggest one that fit." ambient_max_in_flight
+# stays at 2 (unchanged, not scaled proportionally) - CLAUDE.md's hard rule
+# is "ambient capped at 2 of N slots" as a small absolute number so dialogue
+# always has the bulk of slots free, and more total slots only strengthens
+# that: dialogue's guaranteed minimum went from 4-2=2 slots to 6-2=4.
 DISPATCHER = NPCRequestDispatcher(
-    max_concurrent_slots=4,
+    max_concurrent_slots=6,
     ambient_max_in_flight=2,
 )
 

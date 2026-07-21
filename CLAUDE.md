@@ -32,7 +32,8 @@ orchestrator/ (Python, asyncio)
         │
         ▼
 llm-inference: llama.cpp server-cuda, Qwen2.5-7B-Instruct Q4_K_M,
-  --parallel 4 --cont-batching  (≈4 concurrent 2048-token slots)
+  --parallel 6 --cont-batching  (6 concurrent 2048-token slots - real load
+  test on the RTX 3060, 2026-07-21, see "Agreed next steps" below)
 memory-db: Qdrant (embeddings on CPU via fastembed — GPU stays for chat model)
 fact-db: Postgres (facts, personality vectors)
 sandbox/: skill validation in ephemeral --network none --read-only containers
@@ -42,7 +43,10 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
 
 1. **Dialogue always beats ambient.** Player-facing requests wait up to 3s
    for a slot; ambient/idle requests NEVER queue — no slot free now means
-   instant canned fallback. Ambient is capped at 2 of 4 slots.
+   instant canned fallback. Ambient is capped at 2 of 6 slots (was 2 of 4 -
+   see the 2026-07-21 load test below; the cap is a small absolute number
+   on purpose, not a proportional split, so dialogue's guaranteed minimum
+   only grows as slot count grows).
 2. **Nothing blocks the game loop.** Every LLM call has a timeout + fallback.
    The plugin fires events async and applies replies when they arrive.
 3. **Only llm-inference touches the GPU.** Embeddings, DBs, sandbox: CPU.
@@ -189,7 +193,19 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
    GPU/model. It bypasses the live orchestrator's dialogue-priority slot
    arbiter, so only run it during confirmed low-player windows, same as
    `run_skill_validation.sh`.
-3. Load-test llama.cpp slots on the real GPU; tune --parallel/ctx tradeoff.
+3. ~~Load-test llama.cpp slots on the real GPU; tune --parallel/ctx
+   tradeoff.~~ **Done, 2026-07-21** - see README.md's "real concurrency load
+   test" table. `--parallel 6` / `--ctx-size 12288` beat the old
+   `--parallel 4` / `--ctx-size 8192` at every concurrency level tested
+   (better p50/p95 latency, ~25% higher peak throughput) for +227MB VRAM,
+   with 5.5GB still free. `--parallel 8` didn't move the throughput ceiling
+   (~4.5-4.9 req/s either way - this GPU's real compute ceiling for this
+   model, not a slot-count limit) and was noisier, so 6 is the chosen
+   point. `main.py`'s `DISPATCHER.max_concurrent_slots` updated to match -
+   if `--parallel` changes here, that must change too or the extra
+   capacity just sits unused. Not yet tested: *sustained* real multi-player
+   load over time (this was a synthetic burst-concurrency benchmark against
+   `llm-inference` directly, not hours of real dialogue traffic).
 4. ~~Wire NpcAiBridge.java into the Hytale plugin API.~~ **Done and
    confirmed live** - see "State when handed off" above: a real player has
    had a full multi-turn conversation with an in-game NPC through this
@@ -208,10 +224,18 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
    `run_skill_validation.sh`, which is still what actually promotes a skill
    to `approved/`.
 
-## 2026-07-21 audit pass - bugs found and fixed, then approved/ wired up
+## 2026-07-21 audit pass, approved/ wired up, then a real GPU load test
 
 Asked to deep-audit the whole project (not chasing one symptom), fix what's
-real, then close the biggest gap the audit found. Two batches:
+real, close the biggest gap the audit found, then settle the one remaining
+open roadmap item with real data instead of a guess. Three batches:
+
+**Load test**: real concurrency benchmark against `llm-inference` directly
+(realistic ~1770-token prompts, not toy ones) across `--parallel` 4/6/8 -
+see README.md's table. `--parallel 6` / `--ctx-size 12288` won outright
+(better latency than 4 at every level, same throughput ceiling as 8 with
+less VRAM and less noise); shipped as the new default, with `main.py`'s
+`DISPATCHER` updated to match.
 
 **New capability**: `orchestrator/skill_runtime.py` closes the
 `sandbox/approved/` dead-end (see "Agreed next steps" #1 above for full

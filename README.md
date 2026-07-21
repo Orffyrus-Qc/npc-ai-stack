@@ -224,16 +224,36 @@ Plugin connects to `ws://<host>:8765`. Protocol is documented at the top of
 
 > 🐄 **Cow note:** steps 1-4 above have actually been run on a real RTX 3060 -
 > see [what's been verified](#-whats-actually-been-verified-2026-07-20-rtx-3060-12gb).
-> Still not done: benchmarking `--parallel` under sustained multi-player
-> load (only tested up to 4 concurrent requests briefly), and
-> `NpcAiBridge.java` hasn't been wired into a live Hytale NPC event hook yet.
+> `NpcAiBridge.java` is wired into a live Hytale NPC event hook and confirmed
+> working end-to-end (see CLAUDE.md).
+
+**2026-07-21: real concurrency load test on the RTX 3060.** Hit
+`llm-inference` directly at increasing concurrency with realistic
+~1770-token dialogue-shaped prompts (matching `llm_client.py`'s actual
+token-budget cap, not toy prompts):
+
+| Config | VRAM | p50 @ 2x slots | peak throughput |
+|---|---|---|---|
+| `--parallel 4` `--ctx-size 8192` (old default) | 6.35GB | 1.88s | ~3.7 req/s |
+| `--parallel 6` `--ctx-size 12288` (**new default**) | 6.58GB | 1.44s | ~4.7 req/s |
+| `--parallel 8` `--ctx-size 16384` | 6.80GB | 1.76s (noisier) | ~4.6-4.9 req/s |
+
+All three keep the same 2048 tokens/slot (ctx-size scales with parallel).
+`--parallel 8` doesn't move the throughput ceiling over `--parallel 6` -
+that ceiling is this GPU's real compute limit for a 7B Q4_K_M model, not a
+slot-count limit - and its latency was measurably noisier, so 6 is the
+shipped default: better latency than 4 at every concurrency level tested,
+for +227MB VRAM, with 5.5GB still free for headroom. `main.py`'s
+`DISPATCHER` is set to match (`max_concurrent_slots=6`); if you change
+`--parallel` here, change that too or the orchestrator will simply never
+use the extra slots.
 
 ## Tuning knobs
 
 | Symptom | Knob |
 |---|---|
-| Dialogue feels slow under load | lower `--parallel` to 3 (fewer, faster slots) or shrink `max_tokens` |
-| NPCs need longer memory context | `--parallel 2` + bigger per-slot ctx (concurrency<->context tradeoff) |
+| Dialogue feels slow under load | raise `--parallel` (scale `--ctx-size` with it to hold 2048 tokens/slot - see the load-test table above before assuming this needs *lower* parallelism) or shrink `max_tokens` |
+| NPCs need longer memory context | fewer `--parallel` slots + bigger per-slot ctx (concurrency<->context tradeoff) - `llm_client.py`'s `_PROMPT_TOKEN_BUDGET` also needs raising to actually use the extra room |
 | World sim stutters during dialogue | trim `llm-inference` `cpus:` or pin hytale-server cores |
 | Ambient chatter never fires | raise `ambient_max_in_flight` (costs dialogue headroom) |
 | OOM on 8GB card | switch model to the 3B (Llama-3.2-3B / Qwen2.5-3B Q5_K_M) |
