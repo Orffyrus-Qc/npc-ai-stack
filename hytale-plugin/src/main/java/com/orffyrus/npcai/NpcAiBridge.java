@@ -122,10 +122,20 @@ public class NpcAiBridge implements WebSocket.Listener {
     }
 
     private static String extract(String json, String key) {
-        String pat = "\"" + key + "\":\"";
-        int i = json.indexOf(pat);
+        // Python's json.dumps() (orchestrator/main.py) inserts a space after
+        // the colon by default ("npc_id": "x", not "npc_id":"x") - a literal
+        // "\"key\":\"" match never fires against real orchestrator replies,
+        // so the callback silently never runs. Skip whitespace after the
+        // colon instead of assuming none.
+        String keyPat = "\"" + key + "\"";
+        int i = json.indexOf(keyPat);
         if (i < 0) return null;
-        int start = i + pat.length();
+        int colon = json.indexOf(':', i + keyPat.length());
+        if (colon < 0) return null;
+        int start = colon + 1;
+        while (start < json.length() && Character.isWhitespace(json.charAt(start))) start++;
+        if (start >= json.length() || json.charAt(start) != '"') return null;
+        start++;
         StringBuilder sb = new StringBuilder();
         for (int j = start; j < json.length(); j++) {
             char c = json.charAt(j);

@@ -51,6 +51,29 @@ logged and dropped instead of crashing. Compiles and boots clean; **still
 needs a real player to confirm the reply now actually shows up in chat** —
 that's the very next thing to test.
 
+## 2026-07-21, part 2: the actual reason no reply ever arrived
+
+The `PlayerRef` fix above was real, but re-testing live still produced
+nothing: clicking the NPC drove up orchestrator CPU (real LLM calls
+happening) but no chat message ever appeared. The actual root cause was in
+`NpcAiBridge.handleMessage()`'s hand-rolled JSON reader: `extract()` searched
+for the literal substring `"npc_id":"` with no space between the colon and
+the opening quote. `orchestrator/main.py` builds its `"say"` reply with
+Python's `json.dumps()`, which inserts a space after every colon by
+default - `"npc_id": "abc"`, not `"npc_id":"abc"`. That single space meant
+`extract()` returned `null` for every real reply the orchestrator ever sent,
+so `handleMessage()` hit its `if (npcId == null) return;` guard and the
+registered callback was **never once invoked**, regardless of anything else
+being correct. This explains the exact symptom reported twice: the backend
+genuinely working (visible in orchestrator logs / CPU) while nothing ever
+reached the player.
+
+Fixed by making `extract()` tolerate (and skip) whitespace between the key,
+the colon, and the opening quote of the value, instead of assuming compact
+zero-space JSON. Rebuilt, boots clean, `com.orffyrus:NpcAiStack` still loads
+and enables with no plugin-specific errors - **this is the next thing to
+re-test live**, and this time it should actually work end to end.
+
 ## Multi-turn conversation via chat (new, NOT yet live-verified)
 
 Clicking `AI_Talker` now also starts a tracked "conversation" for that
@@ -90,7 +113,7 @@ the NPC-talk mechanism - kept only in case it's useful for something else.
 | `NPCPlugin.get().registerCoreComponentType("TalkToAI", ...)` | **Confirmed** — action fires for real |
 | Custom asset pack (`AI_Talker.json`) ships, loads, and spawns | **Confirmed live** — `/npc spawn AI_Talker` works in a real world |
 | Clicking `AI_Talker` triggers a real dialogue request | **Confirmed live** — repeated orchestrator round trips (Qdrant recall → LLM call → memory write) on each click |
-| Reply reaches the player as a chat message | **First attempt confirmed broken live** (player saw no reply, backend was working) - root-caused to a stale captured `PlayerRef`; fixed by re-resolving via `Universe.get().getPlayer(uuid)` at reply time. Compiles/boots clean, **NOT yet re-verified live** |
+| Reply reaches the player as a chat message | **Two real bugs found by live-testing, both fixed, NOT yet re-verified**: (1) stale captured `PlayerRef`, fixed via `Universe.get().getPlayer(uuid)`; (2) the actual blocker - `NpcAiBridge.extract()` required zero-space JSON (`"npc_id":"x"`) but Python's `json.dumps()` emits a space (`"npc_id": "x"`), so the reply callback was never invoked at all. Fixed to tolerate whitespace. |
 | Player lookup in `TalkToAIAction.execute()` | **Confirmed live** — the whole chain depends on it and it works |
 | Thread-hop before `sendMessage()` in the reply callback | Reasoned-not-verified: `PlayerRef.sendMessage()` is used elsewhere from async command handlers in this codebase, so it's likely cross-thread-safe, but this is inference, not a confirmed guarantee. No entity/world-state mutation happens in the callback (kept deliberately narrow because of this). |
 | Multi-turn conversation (`PlayerChatEvent`) | **Still not implemented** |
@@ -171,14 +194,18 @@ Ctrl+C to stop it; `run/` is gitignored.
 5. ~~Wire `PlayerChatEvent` for real multi-turn conversation.~~ **Done,
    compiles and boots clean** - `PlayerChatToAIListener` + `ACTIVE_CONVERSATIONS`.
 6. ~~Confirm live: does the reply show up as a chat message?~~ **Tested
-   live - it didn't.** Chat interception worked, backend worked, but the
-   reply never reached the player. Root-caused to a stale `PlayerRef`
-   captured before the async LLM round trip; fixed by re-resolving via
-   `Universe.get().getPlayer(uuid)` inside the reply callback instead.
-7. **You are here** - confirm live, again: does the reply now actually
-   show up as a chat message with the fix in place, and does typing after
-   the first click continue the conversation with real text (not just the
-   canned opener)?
+   live twice - it didn't, twice.** First: chat interception worked,
+   backend worked, but the reply never reached the player - root-caused to
+   a stale `PlayerRef` captured before the async LLM round trip, fixed by
+   re-resolving via `Universe.get().getPlayer(uuid)`. Second (after that
+   fix, still no reply): the actual blocker - `NpcAiBridge.extract()`'s
+   hand-rolled JSON reader required no space after `:`, but Python's
+   `json.dumps()` always adds one, so the reply callback was never invoked
+   at all. Fixed to tolerate whitespace.
+7. **You are here** - confirm live, a third time: does the reply now
+   actually show up as a chat message with both fixes in place, and does
+   typing after the first click continue the conversation with real text
+   (not just the canned opener)?
 8. Confirm the thread-hop question properly (or find a case where it
    actually matters - neither reply callback touches entity/world state
    today, only sends a chat message).
