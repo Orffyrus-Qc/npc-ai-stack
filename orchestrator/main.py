@@ -304,6 +304,11 @@ async def handle_outcome(msg: dict) -> None:
     await PERSONALITY.record_outcome(
         msg["npc_id"], player_id, msg["outcome"], baseline
     )
+    # Only the failure paths above used to log anything - a successfully
+    # recorded outcome (e.g. from NoteAttackedByPlayerAction.java) was
+    # otherwise invisible in the orchestrator's own log, making it hard to
+    # confirm live whether a game-side event actually reached here at all.
+    logger.info("npc %s (player %s): outcome=%s", msg["npc_id"], player_id, msg["outcome"])
 
 
 async def plugin_connection(ws) -> None:

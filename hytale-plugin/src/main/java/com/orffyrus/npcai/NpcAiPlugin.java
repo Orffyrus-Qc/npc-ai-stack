@@ -82,6 +82,9 @@ public class NpcAiPlugin extends JavaPlugin {
         NPCPlugin.get().registerCoreComponentType("NoteNearbyThreat", NoteNearbyThreatActionBuilder::new);
         LOGGER.atInfo().log("Registered NoteNearbyThreat NPC action type");
 
+        NPCPlugin.get().registerCoreComponentType("NoteAttackedByPlayer", NoteAttackedByPlayerActionBuilder::new);
+        LOGGER.atInfo().log("Registered NoteAttackedByPlayer NPC action type");
+
         NPCPlugin.get().registerCoreComponentType("OpenShopIfRequested", OpenShopIfRequestedActionBuilder::new);
         LOGGER.atInfo().log("Registered OpenShopIfRequested NPC action type");
 

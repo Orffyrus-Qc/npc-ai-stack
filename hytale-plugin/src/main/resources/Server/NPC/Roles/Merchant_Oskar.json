@@ -104,6 +104,20 @@
               ]
             },
             {
+              "$Comment": "Real, shipped 'Damage' sensor Type (Combat: true) - confirmed via disassembly of SensorDamage/BuilderSensorDamage AND via its real usage in Server/NPC/Roles/_Core/Components/Steps/Component_Instruction_Damage_Check.json (the neutral Kweebec's own Panic trigger). Reports a player physically attacking this NPC as a real outcome (personality.py's player_attacked_npc) - see NoteAttackedByPlayerAction.java. Not yet live-confirmed against a real attack (this NPC role sets Invulnerable:true; grounded in PlayerDamageFilterSystem's own pattern of cancelling damage via a flag on an event that still fires, rather than suppressing the event entirely, but that's inference from disassembly, not a live test).",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Damage",
+                "Combat": true
+              },
+              "Actions": [
+                {
+                  "Type": "NoteAttackedByPlayer",
+                  "AIRole": "merchant"
+                }
+              ]
+            },
+            {
               "$Comment": "Clear wave animation after delay",
               "Continue": true,
               "Sensor": {

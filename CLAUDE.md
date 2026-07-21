@@ -249,13 +249,22 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
    `run_skill_validation.sh`, which is still what actually promotes a skill
    to `approved/`.
 6. ~~Real outcome data never reached personality.py/skill_writer.py from
-   actual gameplay.~~ **Mostly done, 2026-07-21** - see the section below.
-   `player_was_kind`/`player_was_rude` are now inferred straight from every
-   real dialogue turn (zero new Java code). Still open, tracked separately:
-   `player_attacked_npc` needs a genuine new Java/ECS integration
-   (`DamageEventSystem`, not the Sensor/Action extension point everything
-   else here uses) that wants live-client verification this environment
-   doesn't have; `player_gave_gift`/`player_helped_quest`/`joke_landed`/
+   actual gameplay.~~ **Done for kind/rude/attacked, 2026-07-21** - see the
+   sections below. `player_was_kind`/`player_was_rude` are inferred
+   straight from every real dialogue turn (zero new Java code).
+   `player_attacked_npc` initially looked like it needed raw ECS
+   (`DamageEventSystem`) - turned out not to: the real, shipped `"Damage"`
+   Sensor Type (confirmed via disassembly of `SensorDamage`/
+   `BuilderSensorDamage`, and via its real usage in the neutral Kweebec's
+   own Panic trigger) is registered through the exact same
+   `NPCPlugin.registerCoreComponentType()` extension point everything else
+   in this plugin already uses - `NoteAttackedByPlayerAction.java` mirrors
+   `NoteNearbyThreatAction.java`'s pattern exactly. **Boot-tested clean**
+   (`./gradlew runServer` validates and boots with zero errors), **not yet
+   confirmed against a real attack** (all 4 roles set `Invulnerable: true`;
+   reasoned, not confirmed, that damage events still fire regardless - see
+   hytale-plugin/README.md's table). Still genuinely open:
+   `player_gave_gift`/`player_helped_quest`/`joke_landed`/
    `player_shared_news` need game systems (inventory, quests) that don't
    exist at all yet.
 
@@ -281,6 +290,15 @@ plugin uses, and not something to wire blindly without a live client to
 verify against (this session's environment is backend-only). Deferred as
 its own tracked task (see "Agreed next steps" #4) rather than rushed.
 
+**Correction, same day, later**: this conclusion was wrong - see the new
+section further below. `DamageEventSystem` (raw ECS) is real, but it's not
+the only way in; a proper Sensor Type for exactly this ("Damage",
+`Combat: true`) exists and is used by the shipped game itself, just not by
+Trork specifically (the file catalogued above) - it took checking a
+NEUTRAL creature's reactive behavior (Kweebec) to find it, since hostile
+mobs don't need an "under attack" reflex at all (they're already hostile
+by default).
+
 Instead, fixed the actual underlying problem a different way: confirmed via
 direct DB inspection that `npc_outcome_log` had zero real rows for any
 actual live NPC (only stale test fixtures), which meant `personality.py`'s
@@ -301,10 +319,66 @@ correctly withheld) real rows in `npc_outcome_log`, and real trait nudges
 in `npc_personality` - confirmed by direct Postgres inspection, then
 cleaned up the test data.
 
-This does NOT cover `player_attacked_npc`, `player_gave_gift`,
-`player_helped_quest`, `joke_landed`, or `player_shared_news` - the last
-three also need game systems (inventory, quests) that don't exist yet at
-all, and the first needs the deferred Java/ECS work above.
+This did NOT cover `player_attacked_npc` at the time it was written (see
+the next section - it was fixed the same day, later) or
+`player_gave_gift`/`player_helped_quest`/`joke_landed`/`player_shared_news`
+(still open - need game systems, inventory/quests, that don't exist yet).
+
+## 2026-07-21, later still: player_attacked_npc, via the real "Damage" sensor
+
+Picked back up the deferred Java/ECS work above and found the earlier
+conclusion was too pessimistic. Catalogued every Sensor/Action `Type`
+across a NEUTRAL creature's own reactive behavior this time (the Kweebec,
+not Trork) - `Server/NPC/Roles/Intelligent/Neutral/Kweebec/
+Component_Kweebec_Instruction_Panic.json` references
+`Component_Instruction_Damage_Check` (`Server/NPC/Roles/_Core/Components/
+Steps/`), whose real Sensor is `{"Type": "Damage", "Combat": true}` -
+confirmed via `javap` against `SensorDamage`/`BuilderSensorDamage`
+(`com.hypixel.hytale.server.npc.corecomponents.combat`), registered
+through the exact same `corecomponents` extension point as everything else
+in this plugin. The earlier Trork-only catalogue missed it because hostile
+mobs don't need an "under attack" reflex at all - they're already hostile
+by default; the "am I being hit" reflex only exists for creatures that
+start out neutral/passive.
+
+`SensorDamage.getSensorInfo()` returns an `EntityPositionProvider` whose
+`getTarget()` is a plain `Ref<EntityStore>` - the same type this plugin
+already resolves to a `PlayerRef` everywhere else (`TalkToAIAction`, the
+deleted `NpcInteractListener`). No raw ECS needed anywhere.
+
+Added: `NoteAttackedByPlayerAction.java` + `...ActionBuilder.java`, mirroring
+`NoteNearbyThreatAction.java`'s exact pattern - resolves the attacker,
+checks it's really a `PlayerRef` (a Damage sensor match could be a hostile
+mob's stray hit, not a player), debounces per NPC (`COOLDOWN_MILLIS =
+15_000`, same reasoning as `ThreatMemory`'s staleness window - one real
+attack is several hits in a few seconds, and `personality.py`'s
+`LEARNING_RATE` assumes one nudge per interaction, not per hit), then calls
+`bridge.sendOutcome(npcId, aiRole, playerUuid, "player_attacked_npc")`.
+Registered as `NoteAttackedByPlayer` in `NpcAiPlugin.setup()`; added a
+`{"Type": "Damage", "Combat": true}` sensor + action block to all 4 role
+JSONs (`Adventurer`/`AI_Talker`/`Elder_Miri`/`Merchant_Oskar`).
+
+Also fixed a real observability gap found while verifying this:
+`handle_outcome()` in `main.py` only ever logged its FAILURE paths - a
+successfully recorded outcome was invisible in the orchestrator's own log,
+which would have made this specific feature impossible to confirm live
+without directly querying Postgres. Added an info-level log line on
+success.
+
+Verified: `./gradlew build` clean; `./gradlew runServer` boots the real
+Hytale server with "Registered NoteAttackedByPlayer NPC action type" and
+zero validation errors attributable to any of the 4 modified role JSONs
+("Validation complete. Loaded 977 NPC configurations, Generic: 4"); a
+simulated `outcome` WebSocket message matching exactly what the new Java
+code sends produced the new log line and a real row in `npc_outcome_log`,
+confirming the wire contract end-to-end. **Not yet live-confirmed against
+a real attack** - all 4 roles set `Invulnerable: true`, and while
+`DamageSystems$PlayerDamageFilterSystem`'s own pattern (cancelling damage
+via a flag on an event that still fires, rather than suppressing the event
+outright - confirmed via bytecode) is good evidence the Damage sensor
+should still match regardless, that's inference, not a live hit. See
+hytale-plugin/README.md's verification table for how to confirm this
+firmly with a real client.
 
 ## 2026-07-21 audit pass, approved/ wired up, then a real GPU load test
 
