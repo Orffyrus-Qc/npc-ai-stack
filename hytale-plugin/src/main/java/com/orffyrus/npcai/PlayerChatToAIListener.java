@@ -4,6 +4,7 @@ import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.event.events.player.PlayerChatEvent;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
+import com.hypixel.hytale.server.core.universe.Universe;
 
 import java.util.Set;
 import java.util.UUID;
@@ -77,8 +78,16 @@ public class PlayerChatToAIListener {
 
         String npcName = conversation.npcName();
         bridge.registerNpc(conversation.npcId(), (id, text) -> {
+            // Same staleness concern as TalkToAIAction: this fires on the
+            // WebSocket thread after the real LLM round trip, so re-resolve
+            // a fresh PlayerRef from the UUID instead of reusing `sender`.
             LOGGER.atInfo().log("[" + npcName + "] " + text);
-            sender.sendMessage(Message.raw("[" + npcName + "] " + text));
+            PlayerRef freshSender = Universe.get().getPlayer(playerUuid);
+            if (freshSender == null) {
+                LOGGER.atInfo().log("Player " + playerUuid + " no longer online, dropping reply from " + npcName);
+                return;
+            }
+            freshSender.sendMessage(Message.raw("[" + npcName + "] " + text));
         });
         bridge.sendDialogue(
                 conversation.npcId(),

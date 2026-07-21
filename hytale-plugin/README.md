@@ -28,6 +28,29 @@ Getting here took three real, live-tested fixes, in order:
    wave animation after a delay) had been dropped while simplifying the
    role JSON from the original `Kweebec_Merchant.json`. Restored verbatim.
 
+## 2026-07-21: reply-not-arriving bug found and fixed (stale `PlayerRef`)
+
+After the chat listener above was confirmed to correctly intercept and cancel
+the player's message (no stray broadcast, no console log line — expected,
+since cancellation suppresses both), the AI's reply still never showed up in
+the player's chat, even though `docker compose logs orchestrator --timestamps`
+confirmed the backend was completing real LLM calls every time. Both
+`TalkToAIAction.execute()` and `PlayerChatToAIListener.handle()` captured a
+`PlayerRef` once (at click/chat time) and reused that same object ~1-2
+seconds later inside the async reply callback, once the LLM round trip
+finished. That reference appears to go stale over that gap — `PlayerRef` has
+an `isValid()` method, which only makes sense if instances can become
+invalid — so calling `sendMessage()` on it silently did nothing.
+
+Fix: both callbacks now store only the player's `UUID` and re-resolve a
+fresh `PlayerRef` at the moment the reply actually arrives, via
+`Universe.get().getPlayer(playerUuid)` (`Universe` is a singleton reachable
+the same way as `NPCPlugin.get()`; `getPlayer(UUID)` does a live lookup). If
+that returns `null` (player disconnected mid-conversation) the reply is
+logged and dropped instead of crashing. Compiles and boots clean; **still
+needs a real player to confirm the reply now actually shows up in chat** —
+that's the very next thing to test.
+
 ## Multi-turn conversation via chat (new, NOT yet live-verified)
 
 Clicking `AI_Talker` now also starts a tracked "conversation" for that
@@ -67,7 +90,7 @@ the NPC-talk mechanism - kept only in case it's useful for something else.
 | `NPCPlugin.get().registerCoreComponentType("TalkToAI", ...)` | **Confirmed** — action fires for real |
 | Custom asset pack (`AI_Talker.json`) ships, loads, and spawns | **Confirmed live** — `/npc spawn AI_Talker` works in a real world |
 | Clicking `AI_Talker` triggers a real dialogue request | **Confirmed live** — repeated orchestrator round trips (Qdrant recall → LLM call → memory write) on each click |
-| Reply reaches the player as a chat message | **Just added, NOT yet live-verified** - `PlayerRef.sendMessage()` compiles and boots clean, but no player has confirmed seeing the message yet |
+| Reply reaches the player as a chat message | **First attempt confirmed broken live** (player saw no reply, backend was working) - root-caused to a stale captured `PlayerRef`; fixed by re-resolving via `Universe.get().getPlayer(uuid)` at reply time. Compiles/boots clean, **NOT yet re-verified live** |
 | Player lookup in `TalkToAIAction.execute()` | **Confirmed live** — the whole chain depends on it and it works |
 | Thread-hop before `sendMessage()` in the reply callback | Reasoned-not-verified: `PlayerRef.sendMessage()` is used elsewhere from async command handlers in this codebase, so it's likely cross-thread-safe, but this is inference, not a confirmed guarantee. No entity/world-state mutation happens in the callback (kept deliberately narrow because of this). |
 | Multi-turn conversation (`PlayerChatEvent`) | **Still not implemented** |
@@ -147,9 +170,15 @@ Ctrl+C to stop it; `run/` is gitignored.
    repeated real dialogue round trips confirmed in the orchestrator's logs.
 5. ~~Wire `PlayerChatEvent` for real multi-turn conversation.~~ **Done,
    compiles and boots clean** - `PlayerChatToAIListener` + `ACTIVE_CONVERSATIONS`.
-6. **You are here** - confirm live: does the reply show up as a chat
-   message, and does typing after the first click actually continue the
-   conversation with real text (not just the canned opener)?
-7. Confirm the thread-hop question properly (or find a case where it
+6. ~~Confirm live: does the reply show up as a chat message?~~ **Tested
+   live - it didn't.** Chat interception worked, backend worked, but the
+   reply never reached the player. Root-caused to a stale `PlayerRef`
+   captured before the async LLM round trip; fixed by re-resolving via
+   `Universe.get().getPlayer(uuid)` inside the reply callback instead.
+7. **You are here** - confirm live, again: does the reply now actually
+   show up as a chat message with the fix in place, and does typing after
+   the first click continue the conversation with real text (not just the
+   canned opener)?
+8. Confirm the thread-hop question properly (or find a case where it
    actually matters - neither reply callback touches entity/world state
    today, only sends a chat message).

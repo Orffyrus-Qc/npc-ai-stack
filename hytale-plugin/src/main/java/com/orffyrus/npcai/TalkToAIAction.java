@@ -6,11 +6,14 @@ import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.entity.UUIDComponent;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
+import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import com.hypixel.hytale.server.npc.asset.builder.BuilderSupport;
 import com.hypixel.hytale.server.npc.corecomponents.ActionBase;
 import com.hypixel.hytale.server.npc.role.Role;
 import com.hypixel.hytale.server.npc.sensorinfo.InfoProvider;
+
+import java.util.UUID;
 
 /**
  * Runtime "TalkToAI" action. Fires npc-ai-stack's dialogue request for
@@ -62,19 +65,25 @@ public class TalkToAIAction extends ActionBase {
         // the npc" ask instead of showing a UUID in chat.
         String npcName = role.getRoleName();
 
+        UUID playerUuid = playerRef.getUuid();
+
         NpcAiPlugin.ACTIVE_CONVERSATIONS.put(
-                playerRef.getUuid(),
+                playerUuid,
                 new NpcAiPlugin.Conversation(npcId, npcName, System.currentTimeMillis()));
 
         bridge.registerNpc(npcId, (id, text) -> {
-            // Fires on the WebSocket thread. PlayerRef.sendMessage() is used
-            // elsewhere in the engine from async command handlers (e.g.
-            // AbstractPlayerCommand.executeAsync), so it's reasonably assumed
-            // safe to call cross-thread here too - unlike mutating this NPC's
-            // own entity/world state, which would need a real thread-hop and
-            // is NOT done here (no world-state touches in this callback).
+            // Fires on the WebSocket thread, ~1-2s after this method returns
+            // (real LLM round trip). The playerRef captured above may be
+            // stale by then, so re-resolve a fresh one from the UUID via
+            // Universe.get().getPlayer() rather than reusing it - the player
+            // may also have disconnected, hence the null check.
             LOGGER.atInfo().log("[" + npcName + "] " + text);
-            playerRef.sendMessage(Message.raw("[" + npcName + "] " + text));
+            PlayerRef freshPlayerRef = Universe.get().getPlayer(playerUuid);
+            if (freshPlayerRef == null) {
+                LOGGER.atInfo().log("Player " + playerUuid + " no longer online, dropping reply from " + npcName);
+                return;
+            }
+            freshPlayerRef.sendMessage(Message.raw("[" + npcName + "] " + text));
         });
 
         bridge.sendDialogue(
