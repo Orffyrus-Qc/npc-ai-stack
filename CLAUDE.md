@@ -83,7 +83,21 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
   fastembed's cache dir, unpinned qdrant-client resolved to a version that
   removed `.search()`, and personality.py's record_outcome() had an
   asyncpg-unparseable unbound placeholder. All fixed; see git log.
-- **2026-07-20, same day: hytale-plugin/ scaffold added, then compiled and
+- **2026-07-20, LATEST: confirmed working live, end to end.** A real
+  player spawned `AI_Talker`, clicked it, and the orchestrator's own logs
+  showed real, repeated round trips (Qdrant recall -> LLM call -> memory
+  write) on every click - the AI is genuinely generating replies from a
+  real in-game interaction. Two more real bugs found only by watching it
+  fail live, both fixed: TalkToAIActionBuilder redundantly called
+  readCommonConfig() (the real, shipped BuilderActionOpenBarterShop
+  doesn't), which made the role fail spawn validation entirely
+  ("failed to find npc role"); and a dropped animation-reset instruction
+  (diffed against the real Kweebec_Merchant.json to find it) left the NPC
+  stuck animating in place. Replies are now sent back as an actual chat
+  message via PlayerRef.sendMessage() - added but not yet confirmed
+  visible in-game (next thing to check). See hytale-plugin/README.md for
+  the full detail.
+- **2026-07-20, earlier: hytale-plugin/ scaffold added, then compiled and
   booted for real.** User installed Hytale; the real `HytaleServer.jar`
   (v0.5.7) was found on disk and inspected directly (constant-pool dump,
   no javap/JDK available yet) to ground every class/method name used in

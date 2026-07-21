@@ -3,6 +3,7 @@ package com.orffyrus.npcai;
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.logger.HytaleLogger;
+import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.entity.UUIDComponent;
 import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
@@ -64,11 +65,14 @@ public class TalkToAIAction extends ActionBase {
         String playerId = player.getUuid().toString();
 
         bridge.registerNpc(npcId, (id, text) -> {
-            // TODO: fires on the WebSocket thread - hop back onto this
-            // world's tick thread before touching entity/world state.
-            // Applying `text` to an actual chat bubble / dialogue UI is
-            // still unimplemented; logging it is the current placeholder.
+            // Fires on the WebSocket thread. PlayerRef.sendMessage() is used
+            // elsewhere in the engine from async command handlers (e.g.
+            // AbstractPlayerCommand.executeAsync), so it's reasonably assumed
+            // safe to call cross-thread here too - unlike mutating this NPC's
+            // own entity/world state, which would need a real thread-hop and
+            // is NOT done here (no world-state touches in this callback).
             LOGGER.atInfo().log("[" + npcName + "] " + text);
+            playerRef.sendMessage(Message.raw("[" + npcName + "] " + text));
         });
 
         bridge.sendDialogue(

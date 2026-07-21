@@ -1,35 +1,49 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
-**Update 2026-07-20, third pass:** live play testing (`Feran_Civilian`,
-`Kweebec_Merchant` spawned, interacted with) showed **zero dialogue requests
-ever reached the orchestrator**, despite the plugin loading fine and
-`PlayerInteractEvent` compiling cleanly. Digging into the real server jar
-explains why: **NPC interactions in this build don't fire a generic Java
-event at all.** They run through a JSON-driven `Interaction`/`Action` system
-— confirmed by reading the shipped `Kweebec_Merchant` role JSON directly,
-which handles "player interacted" via `"Sensor": {"Type": "HasInteracted"}`
-→ `"Actions": [{"Type": "OpenBarterShop", ...}]`, entirely inside data, no
-event listener involved anywhere.
+## 🎉 2026-07-20: it works, confirmed live, end to end
 
-So this plugin now registers its **own** custom action type (`TalkToAI`),
-following the exact pattern the built-in `OpenBarterShop` action uses
-(disassembled `NPCShopPlugin`/`ActionOpenBarterShop` as the reference), and
-ships a custom NPC role (`AI_Talker`) that uses it. `PlayerInteractEvent`
-is still registered in `NpcAiPlugin` but is **not** the NPC-talk mechanism —
-kept only in case it's useful for something else later.
+A real player spawned `AI_Talker` in a real Hytale world, clicked it, and
+each click produced a real round trip visible in the orchestrator's own
+logs: Qdrant memory recall → `llm-inference` chat completion → episodic
+memory write, repeating on every click. **The AI is genuinely generating
+in-character replies from a real in-game interaction.** The reply is now
+also sent back as an actual chat message to the player
+(`PlayerRef.sendMessage(Message.raw(...))`), not just logged.
+
+Getting here took three real, live-tested fixes, in order:
+1. `PlayerInteractEvent` (the original approach) turned out to never fire
+   for NPC clicks at all — NPC interactions run through a JSON-driven
+   `Interaction`/`Action` system instead (confirmed by reading the shipped
+   `Kweebec_Merchant` role JSON: `"Sensor": {"Type": "HasInteracted"}` →
+   `"Actions": [{"Type": "OpenBarterShop", ...}]`, no event involved). Fix:
+   registered a custom `TalkToAI` action type via
+   `NPCPlugin.get().registerCoreComponentType(...)`, the same call the
+   built-in barter-shop action uses.
+2. The shipped `AI_Talker.json` role failed spawn validation
+   (`"failed to find npc role: AI_Talker"` in-game) because
+   `TalkToAIActionBuilder` redundantly called `readCommonConfig()` - the
+   real, shipped `BuilderActionOpenBarterShop.readConfig()` doesn't call it,
+   so neither should ours. Removing that call fixed it.
+3. The NPC got stuck animating in place - a whole instruction (clearing the
+   wave animation after a delay) had been dropped while simplifying the
+   role JSON from the original `Kweebec_Merchant.json`. Restored verbatim.
+
+`PlayerInteractEvent` is still registered in `NpcAiPlugin` but is **not**
+the NPC-talk mechanism - kept only in case it's useful for something else.
 
 ## What's real vs. what's still unverified
 
 | Piece | Status |
 |---|---|
-| `manifest.json`, plugin lifecycle, `EventRegistry.registerGlobal` | **Confirmed** — real server boot, prior pass |
-| `PlayerInteractEvent` fires for NPC clicks | **Confirmed false** — real play session, zero dialogue requests despite real interactions |
-| `NPCPlugin.get().registerCoreComponentType("TalkToAI", ...)` | **Confirmed** — log: `Registered TalkToAI NPC action type`, no error |
-| Custom asset pack (`AI_Talker.json`) ships and loads | **Confirmed** — log: `Loaded pack: com.orffyrus:NpcAiStack`, role counted in `Loaded 973 NPC configurations ... Generic: 1` |
-| `AI_Talker.json` validation | **Two SEVERE `FAIL: ... Once` / `FAIL: ... Enabled` lines** at boot - no stack trace, role still counts as loaded and plugin still enables. Likely a non-fatal descriptor/validation quirk in `TalkToAIActionBuilder`, but **not confirmed harmless** - could still block the action from firing for a real player. This is the biggest open question. |
-| Player lookup in `TalkToAIAction.execute()` (`Role.getStateSupport().getInteractionIterationTarget()` → `PlayerRef`/`Player` components) | Compiles; copied line-for-line from disassembled `ActionOpenBarterShop.execute()`, but **never exercised against a real interacting player** |
-| Thread-hop before the bridge's reply callback touches world state | **Still not verified** - unchanged from before |
-| Multi-turn conversation (`PlayerChatEvent`) | **Still not implemented** - unchanged from before |
+| `manifest.json`, plugin lifecycle, `EventRegistry.registerGlobal` | **Confirmed** — real server boot |
+| `PlayerInteractEvent` fires for NPC clicks | **Confirmed false** — not the mechanism, see above |
+| `NPCPlugin.get().registerCoreComponentType("TalkToAI", ...)` | **Confirmed** — action fires for real |
+| Custom asset pack (`AI_Talker.json`) ships, loads, and spawns | **Confirmed live** — `/npc spawn AI_Talker` works in a real world |
+| Clicking `AI_Talker` triggers a real dialogue request | **Confirmed live** — repeated orchestrator round trips (Qdrant recall → LLM call → memory write) on each click |
+| Reply reaches the player as a chat message | **Just added, NOT yet live-verified** - `PlayerRef.sendMessage()` compiles and boots clean, but no player has confirmed seeing the message yet |
+| Player lookup in `TalkToAIAction.execute()` | **Confirmed live** — the whole chain depends on it and it works |
+| Thread-hop before `sendMessage()` in the reply callback | Reasoned-not-verified: `PlayerRef.sendMessage()` is used elsewhere from async command handlers in this codebase, so it's likely cross-thread-safe, but this is inference, not a confirmed guarantee. No entity/world-state mutation happens in the callback (kept deliberately narrow because of this). |
+| Multi-turn conversation (`PlayerChatEvent`) | **Still not implemented** |
 
 ## How to actually test this (needs a real client - can't be done from here)
 
@@ -39,17 +53,16 @@ kept only in case it's useful for something else later.
    ./gradlew build
    cp build/libs/NpcAiStack-0.1.0.jar "$APPDATA/Hytale/UserData/Mods/"
    ```
-3. In-game: enable `NpcAiStack` in your world's mod settings, load the world.
+3. In-game: enable `NpcAiStack` in your world's mod settings (**every new
+   world defaults to it disabled** - this tripped up testing once already;
+   check `[PluginManager] Skipping mod com.orffyrus:NpcAiStack (Disabled by
+   server config)` in the log if spawning fails with "failed to find npc
+   role").
 4. `/op self` if you haven't already.
-5. `/npc clean` then `/npc spawn AI_Talker` (a `Kweebec_Rootling`-appearance
-   NPC that waves when you approach - same idle behavior as the built-in
-   merchants, but its interaction triggers our AI instead of a shop).
-6. Interact with it (click), watching `docker compose logs orchestrator -f`
-   at the same time.
-7. Report back exactly what happens - a dialogue request reaching the
-   orchestrator confirms the whole chain works; nothing arriving points at
-   the `Once`/`Enabled` validation warning actually being fatal, in which
-   case `TalkToAIActionBuilder.readCommonConfig()` needs another look.
+5. `/npc clean` then `/npc spawn AI_Talker`.
+6. Interact with it (click) - a reply should now appear as a chat message.
+   Watching `docker compose logs orchestrator -f` at the same time confirms
+   the backend side regardless of what shows up in-game.
 
 ## A real bug found and fixed by actually running this (still applies)
 
@@ -101,13 +114,14 @@ Ctrl+C to stop it; `run/` is gitignored.
 
 1. ~~Get a JDK 25 + this compiling.~~ **Done.**
 2. ~~Confirm the plugin actually loads in a real server.~~ **Done.**
-3. ~~Find the real NPC-interaction mechanism.~~ **Done** - it's the
-   `Interaction`/`Action` JSON system, not events; `TalkToAI` action +
-   `AI_Talker` role built and shipped.
-4. **You are here** - spawn `AI_Talker` in a real client and interact with
-   it; report whether the orchestrator receives anything.
-5. If it does: confirm the thread-hop for touching world state, then wire
-   `PlayerChatEvent` for real multi-turn conversation.
-6. If it doesn't: resolve the `Once`/`Enabled` validation FAIL - likely
-   means something about `TalkToAIActionBuilder`'s config handling is
-   subtly wrong despite compiling and "loading" successfully.
+3. ~~Find the real NPC-interaction mechanism.~~ **Done** - `TalkToAI` action
+   + `AI_Talker` role, live-confirmed working end to end.
+4. ~~Confirm a real click reaches the orchestrator.~~ **Done, live** -
+   repeated real dialogue round trips confirmed in the orchestrator's logs.
+5. **You are here** - confirm the reply actually shows up as a chat message
+   in-game (`PlayerRef.sendMessage()` was just added, unverified live).
+6. Wire `PlayerChatEvent` for real multi-turn conversation (right now it's
+   one canned "the player interacts with you" per click, not free-text).
+7. Confirm the thread-hop question properly (or find a case where it
+   actually matters - the reply callback doesn't touch entity/world state
+   today, only sends a chat message).

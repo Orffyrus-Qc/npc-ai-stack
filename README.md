@@ -104,21 +104,20 @@ caught and fixed a real bug in the official plugin template's own Gradle
 task (`--mods` wants a directory, not a jar path, and the server
 double-counts an explicitly-passed mods dir that's already auto-scanned).
 
-**Update, same day, live play testing:** connecting a real client and
-interacting with real NPCs (`Feran_Civilian`, `Kweebec_Merchant`) proved
-`PlayerInteractEvent` never fires for NPC clicks in this build — zero
-dialogue requests reached the orchestrator despite the plugin working fine
-otherwise. Reading the shipped `Kweebec_Merchant` role JSON directly showed
-why: NPC interactions run through a **JSON-driven Interaction/Action
-system**, not a Java event at all. The plugin now registers its own custom
-`TalkToAI` action type (same registration pattern the built-in
-`OpenBarterShop` shop action uses) and ships a custom NPC role
-(`AI_Talker`) that uses it — confirmed to load and the plugin to still
-enable cleanly, but a `Once`/`Enabled` validation warning on that role is
-unresolved and the actual spawn-and-click flow hasn't been confirmed working
-yet (needs a real player, which can't be simulated here). Read
-[`hytale-plugin/README.md`](hytale-plugin/README.md) for the exact,
-up-to-date breakdown of what's confirmed vs. still a placeholder.
+**🎉 Update, same day: it works, confirmed live.** Connecting a real
+client and interacting with real NPCs first proved `PlayerInteractEvent`
+never fires for NPC clicks in this build — NPC interactions actually run
+through a **JSON-driven Interaction/Action system**, found by reading the
+shipped `Kweebec_Merchant` role JSON directly. After registering a custom
+`TalkToAI` action (same pattern the built-in shop action uses), fixing two
+real bugs found only by watching it fail live (a redundant config-parsing
+call that made the NPC role unspawnable, and a dropped animation-reset
+instruction that left it stuck), **a real player spawned the NPC, clicked
+it, and the orchestrator's logs showed real, repeated round trips** —
+Qdrant memory recall, an actual LLM call, episodic memory writes — on every
+click. The reply is now also sent back as an in-game chat message. Read
+[`hytale-plugin/README.md`](hytale-plugin/README.md) for the full
+blow-by-blow and what's still unverified (multi-turn conversation, mainly).
 
 ---
 
