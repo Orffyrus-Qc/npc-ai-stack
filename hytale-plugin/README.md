@@ -1,5 +1,51 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-21: a cast, not one demo NPC - stable identity + two new characters
+
+With the reply-delivery chain confirmed working end to end, the next step
+was turning "one hardcoded test NPC" into an actual small cast. Two changes:
+
+**Fixed a real latent bug: `npc_id` was the spawned entity's own UUID, not a
+stable character identity.** Every `/npc spawn` (or world reload) creates a
+brand-new random entity UUID, and `TalkToAIAction` was using
+`UUIDComponent.getUuid()` as the `npc_id` sent to the orchestrator - so the
+personality/trust/memory the orchestrator was building up per NPC was being
+silently thrown away and restarted from scratch on every single respawn.
+Fixed by keying `npc_id` on `role.getRoleName()` instead (e.g. `"AI_Talker"`,
+`"Elder_Miri"`) - stable across respawns, so a character's relationship with
+a player actually persists now. Trade-off, accepted deliberately: two
+simultaneously-spawned entities of the *same* role would share one
+identity/conversation slot - fine as long as each named character exists as
+a single instance in the world, which is the intended setup.
+
+**Added two optional JSON fields on the `TalkToAI` action** so a role can
+customize its AI identity without touching Java: `"DisplayName"` (the chat
+name/tag shown in `[Name] ...` replies - falls back to the role's own name)
+and `"AIRole"` (an occupation word like `"elder"`/`"merchant"`, sent to the
+orchestrator as `npc_role` - it feeds `DEFAULT_BASELINES` in
+`orchestrator/main.py` for a starting personality, and the `{role}` slot in
+the system prompt template; falls back to `"villager"`). Read via the
+engine's own `getString()` config-helper (same one
+`BuilderSensorCanInteract` uses for its `ViewSector` field) rather than raw
+Gson, so the field is registered as "known" and doesn't trip the framework's
+"Unknown JSON attribute" boot warning.
+
+**Two new NPCs**, both verbatim copies of `AI_Talker.json`'s proven
+Instructions/MotionControllerList block (only `Appearance`,
+`MemoriesCategory`, and the two new `TalkToAI` fields differ) - appearance
+names pulled straight from the shipped `Assets.zip` to guarantee they're
+real, valid models:
+- `Elder_Miri.json` - `Appearance: "Kweebec_Sapling_Treesinger"`,
+  `AIRole: "elder"` (calm, low-aggression baseline in `DEFAULT_BASELINES`).
+- `Merchant_Oskar.json` - `Appearance: "Klops_Merchant"` (a different
+  creature model, not another Kweebec), `AIRole: "merchant"` (warmer,
+  business-savvy baseline).
+
+Compiles clean, boots clean, all three roles (`AI_Talker`, `Elder_Miri`,
+`Merchant_Oskar`) load with no validation warnings or errors - **not yet
+live-tested that Elder Miri and Oskar actually talk in-character with their
+own personalities**, that's the next thing to confirm.
+
 ## 🎉 2026-07-20: it works, confirmed live, end to end
 
 A real player spawned `AI_Talker` in a real Hytale world, clicked it, and
@@ -153,7 +199,8 @@ the NPC-talk mechanism - kept only in case it's useful for something else.
 | `manifest.json`, plugin lifecycle, `EventRegistry.registerGlobal` | **Confirmed** — real server boot |
 | `PlayerInteractEvent` fires for NPC clicks | **Confirmed false** — not the mechanism, see above |
 | `NPCPlugin.get().registerCoreComponentType("TalkToAI", ...)` | **Confirmed** — action fires for real |
-| Custom asset pack (`AI_Talker.json`) ships, loads, and spawns | **Confirmed live** — `/npc spawn AI_Talker` works in a real world |
+| Custom asset packs (`AI_Talker.json`, `Elder_Miri.json`, `Merchant_Oskar.json`) ship, load, and spawn | `AI_Talker` **confirmed live**; the two new characters **compile/boot clean, not yet live-spawned** |
+| Stable per-character `npc_id` (role name, not spawned entity UUID) | Fixed 2026-07-21, **not yet live-verified that trust/memory actually survives a respawn** - the bug it fixes (identity resetting every respawn) was real but silent, so there's no in-game symptom to re-check other than confirming the fix doesn't regress anything |
 | Clicking `AI_Talker` triggers a real dialogue request | **Confirmed live** — repeated orchestrator round trips (Qdrant recall → LLM call → memory write) on each click |
 | Reply reaches the player as a chat message | **Confirmed live** — two real bugs found and fixed along the way: stale captured `PlayerRef` (fixed via `Universe.get().getPlayer(uuid)`) and `NpcAiBridge.extract()` requiring zero-space JSON when Python's `json.dumps()` emits a space (fixed to tolerate whitespace) |
 | Player lookup in `TalkToAIAction.execute()` | **Confirmed live** — the whole chain depends on it and it works |
@@ -173,11 +220,15 @@ the NPC-talk mechanism - kept only in case it's useful for something else.
    check `[PluginManager] Skipping mod com.orffyrus:NpcAiStack (Disabled by
    server config)` in the log if spawning fails with "failed to find npc
    role").
-4. `/op self` if you haven't already.
-5. `/npc clean` then `/npc spawn AI_Talker`.
-6. Interact with it (click) - a reply should now appear as a chat message.
-   Watching `docker compose logs orchestrator -f` at the same time confirms
-   the backend side regardless of what shows up in-game.
+4. `/op self` if you haven't already, and `/gamemode adventure` - the NPC
+   interact prompt does not appear in Creative mode at all.
+5. `/npc clean` then `/npc spawn AI_Talker` (or `Elder_Miri` /
+   `Merchant_Oskar` - three talkable characters now, see below).
+6. Interact with it (click) - a reply should now appear as a chat message
+   tagged with that character's name (`[Elder Miri] ...`), and typing
+   afterward in normal chat should continue the conversation. Watching
+   `docker compose logs orchestrator -f` at the same time confirms the
+   backend side regardless of what shows up in-game.
 
 ## A real bug found and fixed by actually running this (still applies)
 
@@ -245,12 +296,22 @@ Ctrl+C to stop it; `run/` is gitignored.
    actually matters - neither reply callback touches entity/world state
    today, only sends a chat message; no issue observed in live testing
    so far, but this is inference, not a confirmed guarantee).
-9. Sustained/repeat testing: does the conversation survive multiple
-   NPCs at once, a player disconnecting mid-conversation (the
-   `Universe.getPlayer()` null-check path), or the 5-minute conversation
-   timeout actually firing?
-10. `skill_writer.py` against the real GPU/model (only verified so far
+9. ~~Give the world an actual cast instead of one demo NPC.~~ **Done,
+   compiles and boots clean** - fixed `npc_id` to be stable per character
+   (was silently the spawned entity's UUID, resetting memory/trust on
+   every respawn), added `DisplayName`/`AIRole` config to `TalkToAI`, and
+   shipped two new characters (`Elder_Miri`, `Merchant_Oskar`) with their
+   own personality baselines.
+10. **You are here** - spawn `Elder_Miri` and `Merchant_Oskar` live and
+    confirm each actually talks in character (distinct tone/personality
+    from `AI_Talker`), and that talking to the same character again after
+    a respawn/relog remembers the relationship instead of starting fresh.
+11. Sustained/repeat testing: does the conversation survive multiple
+    NPCs at once, a player disconnecting mid-conversation (the
+    `Universe.getPlayer()` null-check path), or the 5-minute conversation
+    timeout actually firing?
+12. `skill_writer.py` against the real GPU/model (only verified so far
     with a fake LLM/DB) - see the root `CLAUDE.md` "Agreed next steps".
-11. Load-test llama.cpp slots (`--parallel`/ctx tradeoff) with multiple
+13. Load-test llama.cpp slots (`--parallel`/ctx tradeoff) with multiple
     concurrent NPC conversations for real, not just the fake-player test
     client.

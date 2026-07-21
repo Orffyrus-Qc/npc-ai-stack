@@ -72,6 +72,8 @@ PERSONALITY = PersonalityStore()
 DEFAULT_BASELINES: dict[str, Personality] = {
     "blacksmith": Personality(warmth=0.3, aggression=0.4, humor=0.3, curiosity=0.3),
     "innkeeper":  Personality(warmth=0.8, aggression=0.1, humor=0.7, curiosity=0.6),
+    "elder":      Personality(warmth=0.6, aggression=0.05, humor=0.2, curiosity=0.5),
+    "merchant":   Personality(warmth=0.55, aggression=0.15, humor=0.5, curiosity=0.45),
 }
 FALLBACK_BASELINE = Personality()
 

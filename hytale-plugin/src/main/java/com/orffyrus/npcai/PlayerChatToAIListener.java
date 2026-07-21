@@ -92,7 +92,7 @@ public class PlayerChatToAIListener {
         bridge.sendDialogue(
                 conversation.npcId(),
                 npcName,
-                "npc",
+                conversation.aiRole(),
                 playerUuid.toString(),
                 content,
                 "");

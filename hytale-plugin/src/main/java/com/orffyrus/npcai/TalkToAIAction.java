@@ -4,7 +4,6 @@ import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.Message;
-import com.hypixel.hytale.server.core.entity.UUIDComponent;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
@@ -24,13 +23,29 @@ import java.util.UUID;
  * from the real, shipped ActionOpenBarterShop.execute() (disassembled from
  * HytaleServer.jar v0.5.7) - that's the built-in barter-shop action, which
  * needs the exact same "who is interacting with me right now" lookup we do.
+ *
+ * npc_id sent to the orchestrator is the NPC ROLE's name (role.getRoleName(),
+ * e.g. "Elder_Miri"), not the spawned entity's own UUID. Roles are spawned
+ * fresh with a new random entity UUID every time ("/npc spawn" or a world
+ * reload), so keying personality/memory on entity UUID would silently start
+ * a brand-new "NPC" from the orchestrator's point of view on every respawn.
+ * Keying on the stable role name instead means the same named character
+ * keeps its trust/memory across respawns. Trade-off: two simultaneously
+ * spawned entities of the same role would share one identity/conversation
+ * slot - fine as long as each named character exists as a single instance
+ * in the world, which is the intended setup here.
  */
 public class TalkToAIAction extends ActionBase {
 
     private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
 
+    private final String configuredDisplayName;
+    private final String aiRole;
+
     public TalkToAIAction(TalkToAIActionBuilder builder, BuilderSupport support) {
         super(builder);
+        this.configuredDisplayName = builder.displayName;
+        this.aiRole = builder.aiRole;
     }
 
     @Override
@@ -47,29 +62,21 @@ public class TalkToAIAction extends ActionBase {
             return false;
         }
 
-        UUIDComponent npcUuid = store.getComponent(ref, UUIDComponent.getComponentType());
-        if (npcUuid == null) {
-            return false;
-        }
-
         NpcAiBridge bridge = NpcAiPlugin.BRIDGE;
         if (bridge == null) {
             LOGGER.atWarning().log("TalkToAI fired but NpcAiBridge isn't ready yet");
             return false;
         }
 
-        String npcId = npcUuid.getUuid().toString();
-        // getRoleName() ("AI_Talker") rather than the raw entity UUID - not
-        // a per-NPC display name (Role has no such getter that was found),
-        // but at least readable, matching the "visual return to identify
-        // the npc" ask instead of showing a UUID in chat.
-        String npcName = role.getRoleName();
+        String npcId = role.getRoleName();
+        String npcName = (configuredDisplayName != null && !configuredDisplayName.isEmpty())
+                ? configuredDisplayName : npcId;
 
         UUID playerUuid = playerRef.getUuid();
 
         NpcAiPlugin.ACTIVE_CONVERSATIONS.put(
                 playerUuid,
-                new NpcAiPlugin.Conversation(npcId, npcName, System.currentTimeMillis()));
+                new NpcAiPlugin.Conversation(npcId, npcName, aiRole, System.currentTimeMillis()));
 
         bridge.registerNpc(npcId, (id, text) -> {
             // Fires on the WebSocket thread, ~1-2s after this method returns
@@ -89,8 +96,8 @@ public class TalkToAIAction extends ActionBase {
         bridge.sendDialogue(
                 npcId,
                 npcName,
-                "npc",
-                playerRef.getUuid().toString(),
+                aiRole,
+                playerUuid.toString(),
                 "(the player approaches and interacts with you)",
                 "");
 

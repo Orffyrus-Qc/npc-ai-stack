@@ -7,13 +7,22 @@ import com.hypixel.hytale.server.npc.corecomponents.builders.BuilderActionBase;
 import com.hypixel.hytale.server.npc.instructions.Action;
 
 /**
- * Parses the JSON "TalkToAI" action (no config beyond the common action
- * fields) and builds a {@link TalkToAIAction}. Registered by NpcAiPlugin via
+ * Parses the JSON "TalkToAI" action and builds a {@link TalkToAIAction}.
+ * Registered by NpcAiPlugin via
  * NPCPlugin.get().registerCoreComponentType("TalkToAI", ...) - the same
  * pattern the built-in "OpenBarterShop" action uses, confirmed by
  * disassembling NPCShopPlugin.setup().
+ *
+ * Two optional JSON fields let a role customize its AI identity without
+ * touching Java: "DisplayName" (chat name/tag; falls back to the role's
+ * own name) and "AIRole" (occupation word fed into the orchestrator's
+ * personality-baseline lookup and system prompt, e.g. "elder", "merchant";
+ * falls back to "villager").
  */
 public class TalkToAIActionBuilder extends BuilderActionBase {
+
+    String displayName;
+    String aiRole = "villager";
 
     @Override
     public String getShortDescription() {
@@ -40,6 +49,19 @@ public class TalkToAIActionBuilder extends BuilderActionBase {
         // that made the resulting NPC role unspawnable ("Can't find a
         // matching role builder"). The framework evidently invokes
         // readCommonConfig() separately as part of the builder pipeline.
+        //
+        // Use the engine's own getString() config-helper (same one
+        // BuilderSensorCanInteract.readConfig() uses for its ViewSector
+        // float field) rather than reading the JsonElement by hand - it
+        // also registers the key as a known/valid field for the framework's
+        // own JSON schema validator, avoiding a harmless but noisy "Unknown
+        // JSON attribute" boot warning that a raw Gson read triggers.
+        getString(json, "DisplayName", v -> displayName = v, "", null,
+                BuilderDescriptorState.Experimental,
+                "Chat display name for this NPC (falls back to the role's own name if unset)", null);
+        getString(json, "AIRole", v -> aiRole = v, "villager", null,
+                BuilderDescriptorState.Experimental,
+                "Occupation word fed into the AI orchestrator's personality baseline and prompt", null);
         return this;
     }
 
