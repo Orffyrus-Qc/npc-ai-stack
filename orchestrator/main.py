@@ -27,12 +27,16 @@ Orchestrator -> plugin:
   # and "open_shop" against "this NPC already became someone's companion,
   # they don't run a shop anymore" (also taming.py), by the time this is
   # sent - the plugin can act on "open_shop" directly with no further
-  # checks needed. "offer_guide"/"offer_fight"/"decline_guide" are
-  # informational only for now - the plugin doesn't act on them yet (no
-  # guiding/movement or combat implementation exists yet). The "situation"
-  # field the plugin sends in may include a live-detected nearby-threat
-  # note (see hytale-plugin's ThreatMemory.java) alongside static location
-  # info, which is what these three actions typically react to.
+  # checks needed. "offer_guide" drives real movement (GuideState/
+  # SeekLandmarkSensor in the plugin - walks toward the nearest known
+  # landmark, or nearest water if the player's message mentioned it).
+  # "offer_fight"/"decline_guide" are still informational only - real
+  # combat exists in the plugin (Attack action gated on IsCompanion +
+  # a locked hostile Target) but is driven by passive hostile-detection,
+  # not this specific per-message decision. The "situation" field the
+  # plugin sends in may include a live-detected nearby-threat note (see
+  # hytale-plugin's ThreatMemory.java) alongside static location info,
+  # which is what these three actions typically react to.
 
 The plugin should treat every call as async: send the event, keep ticking,
 apply the "say" whenever it arrives. A 200ms-2s delay reads as the NPC
