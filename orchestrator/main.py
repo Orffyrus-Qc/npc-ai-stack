@@ -113,6 +113,14 @@ PERSONALITY = PersonalityStore()
 TAMING = TamingStore()
 SKILLS = SkillRuntime(Path(os.environ.get("SANDBOX_DIR", "/sandbox")))
 
+# Minimum felt delay for a dialogue reply - see handle_dialogue()'s comment
+# at the return site. 1.3s sits comfortably above this stack's own p50
+# latency at moderate load (README's 2026-07-21 load-test table) - most
+# real replies already take close to or longer than this, so in practice
+# this mostly pads the fast/cached-slot cases rather than adding to every
+# single turn.
+MIN_REPLY_DELAY_S = 1.3
+
 # Per-role defaults; move to config/DB as your cast grows.
 DEFAULT_BASELINES: dict[str, Personality] = {
     "blacksmith": Personality(warmth=0.3, aggression=0.4, humor=0.3, curiosity=0.3),
@@ -174,6 +182,7 @@ async def _build_context(msg: dict) -> NPCContext:
 
 
 async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
+    turn_started = time.monotonic()
     ctx = await _build_context(msg)
     raw = await DISPATCHER.request_dialogue(
         ctx.npc_id, lambda: LLM.dialogue(ctx, msg["text"])
@@ -239,6 +248,22 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
     if outcome and player_id:
         baseline = DEFAULT_BASELINES.get(msg.get("npc_role", ""), FALLBACK_BASELINE)
         _spawn(PERSONALITY.record_outcome(ctx.npc_id, player_id, outcome, baseline))
+    # A reply that arrives too fast reads as unnaturally instant - real
+    # conversation has a beat where the other person visibly thinks before
+    # answering, and the plugin's "IsAwaitingReply" particle (see
+    # AwaitingReplyState.java) needs at least a moment on screen to register
+    # as anything, not flash and vanish. Pads fast replies up to a minimum
+    # felt delay; never adds ON TOP of an already-slow one, so this never
+    # compounds load-induced latency. Deliberately measured from the start
+    # of this whole turn (context build + GPU wait + LLM call), not just the
+    # LLM call itself, and deliberately AFTER the dispatcher's slot was
+    # already released (see request_dialogue's finally block) - padding
+    # happens on this player's own perceived latency only, never while
+    # holding a GPU slot other players could be waiting on.
+    elapsed = time.monotonic() - turn_started
+    if elapsed < MIN_REPLY_DELAY_S:
+        await asyncio.sleep(MIN_REPLY_DELAY_S - elapsed)
+
     # ctx.is_companion is re-checked fresh (Postgres-backed via taming.py,
     # not the plugin's own ephemeral CompanionState) and returned on every
     # single turn - see the wire-send comment in plugin_connection() for why

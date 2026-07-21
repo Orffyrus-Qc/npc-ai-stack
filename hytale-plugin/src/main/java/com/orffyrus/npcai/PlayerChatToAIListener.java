@@ -92,6 +92,10 @@ public class PlayerChatToAIListener {
         String situation = conversation.situation();
         String fullSituation = threat.isEmpty() ? situation : situation + " " + threat;
 
+        // See TalkToAIAction's matching comment - shows the "thinking"
+        // particle above this NPC's head until the callback below clears it.
+        AwaitingReplyState.start(conversation.npcId());
+
         bridge.sendDialogue(
                 conversation.npcId(),
                 npcName,
@@ -105,6 +109,7 @@ public class PlayerChatToAIListener {
                     // the WebSocket thread after the real LLM round trip, so
                     // re-resolve a fresh PlayerRef from the UUID instead of
                     // reusing `sender`.
+                    AwaitingReplyState.clear(id);
                     LOGGER.atInfo().log("[" + npcName + "] " + text);
                     PlayerRef freshSender = Universe.get().getPlayer(playerUuid);
                     if (freshSender == null) {

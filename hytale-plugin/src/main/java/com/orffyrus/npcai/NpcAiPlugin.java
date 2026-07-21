@@ -91,6 +91,9 @@ public class NpcAiPlugin extends JavaPlugin {
         NPCPlugin.get().registerCoreComponentType("IsCompanion", IsCompanionSensorBuilder::new);
         LOGGER.atInfo().log("Registered IsCompanion NPC sensor type");
 
+        NPCPlugin.get().registerCoreComponentType("IsAwaitingReply", IsAwaitingReplySensorBuilder::new);
+        LOGGER.atInfo().log("Registered IsAwaitingReply NPC sensor type");
+
         NPCPlugin.get().registerCoreComponentType("SeekLandmark", SeekLandmarkSensorBuilder::new);
         LOGGER.atInfo().log("Registered SeekLandmark NPC sensor type");
 

@@ -89,6 +89,11 @@ public class TalkToAIAction extends ActionBase {
         String threat = ThreatMemory.describe(npcId);
         String fullSituation = threat.isEmpty() ? situation : situation + " " + threat;
 
+        // Marks this NPC as awaiting a reply so IsAwaitingReplySensor's
+        // "thinking" particle shows above its head until the callback below
+        // clears it - see AwaitingReplyState's javadoc.
+        AwaitingReplyState.start(npcId);
+
         bridge.sendDialogue(
                 npcId,
                 npcName,
@@ -104,6 +109,7 @@ public class TalkToAIAction extends ActionBase {
                     // from the UUID via Universe.get().getPlayer() rather
                     // than reusing it - the player may also have
                     // disconnected, hence the null check.
+                    AwaitingReplyState.clear(id);
                     LOGGER.atInfo().log("[" + npcName + "] " + text);
                     PlayerRef freshPlayerRef = Universe.get().getPlayer(playerUuid);
                     if (freshPlayerRef == null) {

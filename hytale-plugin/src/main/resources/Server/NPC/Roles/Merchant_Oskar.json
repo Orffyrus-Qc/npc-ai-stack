@@ -90,6 +90,21 @@
               }
             },
             {
+              "$Comment": "\"AI process message waiting\" indicator: a floating thought-bubble particle above this NPC's head while npc-ai-stack is waiting on a real orchestrator round trip - a reply that just appears in chat with zero visual buildup reads as unnaturally instant. Real, shipped particle asset (Server/Particles/NPC/Emotions/Question_Subtle.particlesystem); Offset [0, 2.1, 0] matches the real, shipped usage in Trork's own Alerted-state SpawnParticles call. \"Once\": true so this fires once per wait, not every tick for the whole duration - see IsAwaitingReplySensor.java/AwaitingReplyState.java.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "IsAwaitingReply",
+                "Once": true
+              },
+              "Actions": [
+                {
+                  "Type": "SpawnParticles",
+                  "Offset": [ 0, 2.1, 0 ],
+                  "ParticleSystem": "Question_Subtle"
+                }
+              ]
+            },
+            {
               "$Comment": "Open the real barter shop if npc-ai-stack's AI decided OPEN_SHOP. Lives here (Watching), not $Interaction - $Interaction only lasts ~1 tick-second before Timeout/ReleaseTarget ends it, but the real LLM round trip that decides OPEN_SHOP routinely takes longer than that, so a check placed in $Interaction alone misses its window almost every time (confirmed live). Watching is where a conversation actually spends its time.",
               "Continue": true,
               "Sensor": {
@@ -208,6 +223,21 @@
               "HeadMotion": {
                 "Type": "Watch"
               }
+            },
+            {
+              "$Comment": "Same \"AI process message waiting\" indicator as the Watching state above - the very start of a click-triggered conversation's wait happens here, in $Interaction, before the ~1s Timeout below reverts to Watching.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "IsAwaitingReply",
+                "Once": true
+              },
+              "Actions": [
+                {
+                  "Type": "SpawnParticles",
+                  "Offset": [ 0, 2.1, 0 ],
+                  "ParticleSystem": "Question_Subtle"
+                }
+              ]
             },
             {
               "$Comment": "Keep following even while starting a conversation - $Interaction only lasts ~1s before the Timeout below returns to Watching, but without this an established companion visibly freezes for that second every time the player clicks to talk. Continue:true is required here so the Timeout node below still runs every tick regardless of whether this one matches - without it, a nearby companion would get stuck in $Interaction forever.",

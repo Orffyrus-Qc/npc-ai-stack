@@ -427,6 +427,64 @@ companion-combat system it extends (see hytale-plugin/README.md's "Known
 simplification" - no live test session so far has happened near a real
 hostile creature).
 
+## 2026-07-21, later still: a "thinking" icon, and replies stop feeling instant
+
+Requested: an "AI process message waiting" icon over the NPC's head, and
+fix the way replies arrive instantly - it breaks immersion.
+
+**The icon.** Needed a real, shipped way to show a floating icon above an
+entity - `EntityUIType` (`EntityStat`/`CombatText`) turned out to be a
+narrow health-bar/damage-number system, not a general-purpose icon slot, so
+that was a dead end. The real answer was simpler: `ActionSpawnParticles`
+(`"Type": "SpawnParticles"`), already used in this project's own
+`NoteNearbyThreat` sibling work (Trork's `Alerted` state spawns a particle
+at `Offset: [0, 2.1, 0]`, confirmed real usage to copy the positioning
+from) - and the shipped particle library has a whole `Server/Particles/
+NPC/Emotions/` category (`Question`, `Question_Subtle`, `Angry`, `Hearts`,
+`Sleepy`, `Stunned`, plus `.particlespawner`-only `ThoughtCloud_*` variants
+that aren't compatible with `SpawnParticles`'s `ParticleSystemExistsValidator`
+- confirmed via bytecode it only accepts `.particlesystem` assets).
+Landed on `Question_Subtle.particlesystem` - a floating "?" reads as
+"thinking about what to say" without being as visually loud as `Question`.
+
+Needed a way to trigger it from Java (not the passive Sensor/Action tree
+alone, since "a dialogue request is in flight" is state only Java code
+knows about) - built the same way `CompanionState`/`GuideState` already
+bridge Java state into JSON sensors: `AwaitingReplyState.java` (a
+TTL-swept `ConcurrentHashMap`, same shape as `PendingShopOpen`) set by
+`TalkToAIAction`/`PlayerChatToAIListener` right before `bridge.
+sendDialogue()` and cleared the moment that specific reply's callback
+fires, plus `IsAwaitingReplySensor.java`/`...Builder.java` (mirrors
+`IsCompanionSensor` exactly) exposing it as `{"Type": "IsAwaitingReply"}`
+in role JSON. `"Once": true` (the same modifier `Component_Instruction_
+Wild_Panic_Passive.json` uses to fire an animation once per state-entry,
+not every tick) keeps this from re-spawning particles every tick for the
+whole wait. Added to both `Watching` and `$Interaction` states in all 4
+role JSONs, since a click-triggered conversation's wait starts in
+`$Interaction` (before the ~1s timeout reverts to `Watching`) but usually
+finishes in `Watching`.
+
+**The pacing.** Even with the icon, a reply that lands in 0.5s (a real,
+observed latency at low concurrency - see the load-test table) doesn't
+give the icon time to register as anything before being replaced by text.
+`main.py`'s `handle_dialogue()` now pads any reply faster than
+`MIN_REPLY_DELAY_S` (1.3s) up to that minimum, measured from the start of
+the whole turn and applied AFTER the dispatcher's GPU slot is already
+released (`request_dialogue`'s `finally` block) - this is purely this
+player's own perceived latency, it never holds a slot open longer than the
+real LLM call needed, so it can't cost other players GPU throughput. A
+reply that's already slower than 1.3s is never delayed further - this only
+pads the fast case, never compounds load-induced latency.
+
+**Boot-tested clean** (`./gradlew runServer`: `Registered IsAwaitingReply
+NPC sensor type`, zero validation errors, `ParticleSystem: 569` assets
+loaded including the referenced one). Pacing verified live end-to-end:
+three real dialogue turns through a real WebSocket connection to the
+running orchestrator each measured 1.30s, confirmed padding a reply that
+would otherwise have arrived instantly. The icon itself is **not
+live-confirmed** - same limitation as everything else requiring a
+connected client this session: boot/validation-tested only.
+
 ## 2026-07-21 audit pass, approved/ wired up, then a real GPU load test
 
 Asked to deep-audit the whole project (not chasing one symptom), fix what's
