@@ -18,10 +18,25 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
+import random
 import time
 from typing import Awaitable, Callable, Optional
 
 logger = logging.getLogger("npc.priority_queue")
+
+# Shown instead of the old flat "..." when the GPU has no free slot right now
+# or the call itself timed out - an in-character "give me a moment" reads far
+# better than a silent pause, and rotating through several avoids the NPC
+# saying the exact same filler line every time it happens (the same
+# repetition complaint that motivated dialogue()'s repeat_penalty).
+_BUSY_LINES = (
+    "Hold that thought a moment...",
+    "Let me think on that for a moment.",
+    "One moment, if you would.",
+    "Give me just a moment to gather my thoughts.",
+    "Ask me again in a moment, would you?",
+    "My mind's elsewhere just now - try again shortly.",
+)
 
 
 class Priority(enum.IntEnum):
@@ -88,7 +103,9 @@ class NPCRequestDispatcher:
     @staticmethod
     def _default_fallback(npc_id: str, priority: Priority) -> str:
         if priority is Priority.DIALOGUE:
-            return "..."  # NPC visibly "pauses" rather than the game stalling
+            # An in-character "give me a moment" rather than a flat "..." or
+            # the game silently stalling - see _BUSY_LINES above.
+            return random.choice(_BUSY_LINES)
         return ""  # ambient ticks silently no-op when the GPU is busy
 
     async def request_dialogue(

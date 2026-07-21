@@ -140,6 +140,11 @@ you actually do know the answer. Being specific here is what makes you feel like
 you truly know this player, which matters more than sounding aloof.
 - Only if a topic is NOT covered anywhere above, be vague or curious in character \
 rather than inventing precise facts you don't have.
+- Check "Things YOU remember" above before you speak: if it shows you already said \
+something very close to what you're about to say again, DO NOT repeat that same \
+line - a real person doesn't say the exact same sentence every time they're greeted. \
+Vary your wording, add a new detail, or react to the fact that the player is back \
+again instead.
 - After your spoken line, on a new line, output exactly one tag deciding what \
 you want to do next: "ACTION: NONE", "ACTION: OFFER_GUIDE", "ACTION: OFFER_FIGHT", \
 "ACTION: DECLINE_GUIDE", "ACTION: ACCEPT_TAME", or "ACTION: OPEN_SHOP". These only \
@@ -228,7 +233,9 @@ class LlamaClient:
 
     async def complete(self, messages: list[dict], max_tokens: int,
                         temperature: float = 0.7,
-                        stop: Optional[list[str]] = None) -> str:
+                        stop: Optional[list[str]] = None,
+                        repeat_penalty: Optional[float] = None,
+                        presence_penalty: Optional[float] = None) -> str:
         """
         Generic chat completion, no NPC-dialogue post-processing. Used directly
         by callers that aren't building an in-character spoken line (e.g. the
@@ -237,6 +244,18 @@ class LlamaClient:
         payload = {"messages": messages, "max_tokens": max_tokens, "temperature": temperature}
         if stop:
             payload["stop"] = stop
+        # repeat_penalty is a llama.cpp-server extension (not standard OpenAI
+        # API); presence_penalty is standard but llama.cpp honors it too. Both
+        # left unset (None) for generic callers like skill_writer/compression
+        # that don't need them - only dialogue/ambient set these, since a
+        # small 7B model reusing near-identical prompts (same personality,
+        # same cached situation, similar short player messages) otherwise
+        # reliably regenerates the exact same line turn after turn, confirmed
+        # by live testing (see dialogue()'s comment).
+        if repeat_penalty is not None:
+            payload["repeat_penalty"] = repeat_penalty
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
         resp = await self._client.post(self._url, json=payload)
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
@@ -245,10 +264,22 @@ class LlamaClient:
         # No "\n" stop here (unlike the old single-line version) - the model
         # needs a second line free for the ACTION tag. max_tokens bumped
         # accordingly; still tight enough to protect slot throughput.
+        #
+        # repeat_penalty/presence_penalty added after live testing showed
+        # NPCs reliably repeating the exact same greeting/offer line verbatim
+        # across separate conversation turns - the prompt is nearly identical
+        # each time (same personality, same cached situation, short similar
+        # player messages), so even temperature=0.8 alone wasn't enough
+        # variety. Combined with the new "don't repeat yourself" rule in
+        # SYSTEM_TEMPLATE (which needs the model to actually notice the
+        # repeat via "Things YOU remember") - the penalty works even when
+        # memory recall doesn't surface a matching past line.
         raw = await self.complete(
             build_dialogue_messages(ctx, player_utterance),
             max_tokens=110,
             temperature=0.8,
+            repeat_penalty=1.15,
+            presence_penalty=0.4,
         )
         return _parse_dialogue_response(raw)
 
@@ -265,5 +296,6 @@ class LlamaClient:
         messages = build_dialogue_messages(
             ctx, f"(You mutter to yourself about: {situation}. One short line.)"
         )
-        raw = await self.complete(messages, max_tokens=60, temperature=0.9)
+        raw = await self.complete(messages, max_tokens=60, temperature=0.9,
+                                   repeat_penalty=1.15, presence_penalty=0.4)
         return _parse_dialogue_response(raw).text
