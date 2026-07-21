@@ -1,5 +1,65 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 🎉 2026-07-21: guide-to-landmark confirmed working live, after 5 real bugs found by testing it
+
+The guide-to-landmark feature below (and the companion-follow/combat
+features from the same day) went through a full round of real, live
+testing with a connected player - not just boot-testing - and every
+single bug found was a genuine mechanism-level mistake, not something a
+code review would have caught:
+
+1. **Wrong parameter order to `SpiralSearchUtil.search()`.** Assumed
+   `(x, y, z, radius)` from the call shape; disassembling the real
+   `LocateZoneCommand`/`AbstractLocateSubcommand` (whose own compiled
+   `LocalVariableTable` names the args `seed`, `playerX`, `playerZ`)
+   showed the true signature is `(seed, x, z, radius)` - a pure 2D
+   search. The bug silently searched near world origin instead of near
+   the NPC, producing wildly wrong "nearest landmark" coordinates -
+   confirmed live when an NPC was told to guide toward a point over 1500
+   blocks from its actual position.
+2. **`docker compose restart` doesn't rebuild the image.** A companion-
+   resync fix was written, "deployed," and live-tested as still broken -
+   because `restart` reuses the existing image, silently leaving the old
+   code running for a full test cycle. `docker compose up -d --build
+   <service>` is required after any orchestrator code change; verified
+   after the fact by grepping the running container's `/app/*.py` for
+   the new code.
+3. **Water search radius too small.** `SEARCH_RADIUS` (400 blocks,
+   tuned for biome-region zones) was reused for Ocean/Shallow_Ocean/Shore
+   search too, but coastline is far sparser than biome zones - a
+   `NEAREST_WATER` guide request reliably found nothing at all for an
+   inland player. Given a separate, much larger `WATER_SEARCH_RADIUS`
+   (3000 blocks).
+4. **`$Interaction` had zero movement instructions.** The state an NPC
+   enters for ~1s every time a player clicks to start talking had no
+   `BodyMotion` node at all (unlike `Watching`), so an established
+   companion visibly froze for that second on every click. Added the
+   same companion-follow node to `$Interaction`.
+5. **No timeout on guiding.** The guide node has no `Continue` in
+   `Watching`, so it takes absolute priority over companion-follow for
+   as long as it keeps matching. Since almost every reply decided
+   `OFFER_GUIDE` (even generic "I'll follow you" lines), and nothing
+   capped how long the NPC would keep beelining toward a landmark, a
+   companion could stop following the player *permanently* after a
+   single conversation - reported live as "he follows me at first but
+   won't follow after I talk to him." Fixed with a 25s give-up timeout
+   in `GuideState`/`SeekLandmarkSensor`.
+
+Also fixed from the same live-testing round: NPCs repeating the exact
+same line verbatim across separate turns (added `repeat_penalty`/
+`presence_penalty` to the llama.cpp call, plus an explicit "don't repeat
+yourself" prompt rule), and the dispatcher's flat `"..."` GPU-busy
+fallback replaced with a rotating pool of in-character "give me a
+moment" lines.
+
+**Known simplification, stated plainly:** companion combat (below) is
+tied purely to "is this NPC a companion + is a hostile nearby," not to a
+specific in-conversation "let's fight" request - a tamed companion will
+engage any hostile it notices while following, regardless of what was
+actually said. Real combat itself is still boot-tested only as of this
+section - none of the live test sessions so far happened near a hostile
+creature.
+
 ## 2026-07-21: NPCs can actually lead you to a landmark, not just describe it
 
 Requested: once an NPC follows the player, the next step is for it to be
