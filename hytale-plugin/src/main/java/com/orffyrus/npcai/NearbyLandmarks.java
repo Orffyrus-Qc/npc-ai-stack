@@ -54,6 +54,16 @@ public final class NearbyLandmarks {
     /** Closest landmark's real world coordinate per NPC - what GuideState-driven
      * SeekLandmarkSensor actually walks the NPC toward when asked to guide. */
     private static final Map<String, Vector3i> CLOSEST_POSITION = new ConcurrentHashMap<>();
+    /** Closest water (Ocean/Shallow_Ocean/Shore zone) coordinate per NPC - see
+     * closestWaterPosition()'s javadoc. Cached separately from CLOSEST_POSITION
+     * since it's a distinct, on-demand query (GuideState.Target.NEAREST_WATER),
+     * not the passive general-flavor-text search describe() always runs. A
+     * sentinel (not null) marks "searched, found nothing" so a NPC that has
+     * no reachable water within SEARCH_RADIUS doesn't re-run the search on
+     * every single tick while guiding.
+     */
+    private static final Map<String, Vector3i> CLOSEST_WATER_POSITION = new ConcurrentHashMap<>();
+    private static final Vector3i NO_WATER_FOUND = new Vector3i(Integer.MIN_VALUE, Integer.MIN_VALUE, Integer.MIN_VALUE);
 
     private NearbyLandmarks() { }
 
@@ -81,6 +91,71 @@ public final class NearbyLandmarks {
      */
     public static Vector3i closestPosition(String npcId) {
         return CLOSEST_POSITION.get(npcId);
+    }
+
+    /**
+     * Nearest Ocean/Shallow_Ocean/Shore zone - the closest real
+     * approximation to "lake"/"river"/"water" Hytale's worldgen actually
+     * tracks. Confirmed via the real shipped Zone.json assets (Assets.zip,
+     * Server/World/Default/Zones/*) that there is no discrete lake/river
+     * zone type at all - only Oceans/Shallow_Ocean/Shore/biome-region/
+     * Temple/Tier zones exist, so a request to "guide to the lake" has
+     * nothing literal to walk toward; this is the nearest thing that's
+     * actually water. Unlike describe()'s general search, this does NOT
+     * gate on discoveryConfig().display() - Ocean/Shore zones are basic
+     * biome types, not curated "landmarks", but this is a deliberate,
+     * specific query rather than passive flavor-text discovery, so they're
+     * searched directly by name instead.
+     */
+    public static Vector3i closestWaterPosition(String npcId, Ref<EntityStore> npcRef, Store<EntityStore> store) {
+        Vector3i result = CLOSEST_WATER_POSITION.computeIfAbsent(npcId, id -> {
+            try {
+                Vector3i pos = computeWater(npcRef, store);
+                return pos != null ? pos : NO_WATER_FOUND;
+            } catch (Exception e) {
+                LOGGER.atWarning().log("NearbyLandmarks water search failed for " + id + ": " + e);
+                return NO_WATER_FOUND;
+            }
+        });
+        return result == NO_WATER_FOUND ? null : result;
+    }
+
+    private static Vector3i computeWater(Ref<EntityStore> npcRef, Store<EntityStore> store) {
+        TransformComponent tc = store.getComponent(npcRef, TransformComponent.getComponentType());
+        if (tc == null) return null;
+        WorldChunk chunk = tc.getChunk();
+        if (chunk == null) return null;
+        World world = chunk.getWorld();
+        if (world == null) return null;
+        IWorldGen gen = world.getChunkStore().getGenerator();
+        if (!(gen instanceof ChunkGenerator cg)) return null;
+
+        Vector3d pos = tc.getPosition();
+        int x = (int) pos.x, z = (int) pos.z;
+        int seed = (int) world.getWorldConfig().getSeed();
+
+        Vector3i best = null;
+        long bestDistSq = Long.MAX_VALUE;
+        for (Zone zone : cg.getZonePatternProvider().getZones()) {
+            String zoneName = zone.name();
+            if (!zoneName.contains("Ocean") && !zoneName.contains("Shore")) {
+                continue;
+            }
+            Vector3i hit = SpiralSearchUtil.search(cg, seed, x, z, SEARCH_RADIUS,
+                    zbr -> {
+                        ZoneGeneratorResult zr = zbr.getZoneResult();
+                        return zr != null && zr.getZone() != null && zoneName.equals(zr.getZone().name());
+                    });
+            if (hit != null) {
+                long dx = hit.x - x, dz = hit.z - z;
+                long distSq = dx * dx + dz * dz;
+                if (distSq < bestDistSq) {
+                    bestDistSq = distSq;
+                    best = new Vector3i(hit.x, cg.getHeight(seed, hit.x, hit.z), hit.z);
+                }
+            }
+        }
+        return best;
     }
 
     private static String compute(String npcId, Ref<EntityStore> npcRef, Store<EntityStore> store) {

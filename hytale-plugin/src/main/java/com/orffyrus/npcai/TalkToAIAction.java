@@ -117,9 +117,13 @@ public class TalkToAIAction extends ActionBase {
                 PendingShopOpen.request(playerUuid);
             } else if ("offer_guide".equals(action)) {
                 // SeekLandmarkSensor checks this every tick and walks toward
-                // NearbyLandmarks.closestPosition(npcId), auto-stopping once
-                // arrived - see both classes' javadoc.
-                GuideState.startGuiding(npcId);
+                // the target NearbyLandmarks resolves, auto-stopping once
+                // arrived - see both classes' javadoc. No real player free-
+                // text is available here (this fires from a click, not
+                // chat - playerText below is a canned string), so there's
+                // nothing to keyword-match for a water request; always the
+                // generic nearest-landmark mode.
+                GuideState.startGuiding(npcId, GuideState.Target.NEAREST_LANDMARK);
             }
         });
 

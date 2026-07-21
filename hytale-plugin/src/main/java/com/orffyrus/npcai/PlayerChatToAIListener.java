@@ -29,6 +29,12 @@ public class PlayerChatToAIListener {
 
     private static final long CONVERSATION_TIMEOUT_MILLIS = 5 * 60 * 1000L;
     private static final Set<String> EXIT_WORDS = Set.of("bye", "goodbye", "exit", "leave", "stop");
+    // See GuideState.Target.NEAREST_WATER's javadoc: Hytale has no discrete
+    // "lake"/"river" zone, only Ocean/Shallow_Ocean/Shore - this just decides
+    // which of the two NearbyLandmarks queries to point the guide at, based
+    // on what the player actually asked for.
+    private static final Set<String> WATER_KEYWORDS =
+            Set.of("lake", "river", "pond", "sea", "ocean", "water", "swim", "shore", "beach");
 
     private final NpcAiBridge bridge;
 
@@ -97,7 +103,7 @@ public class PlayerChatToAIListener {
             if ("open_shop".equals(action)) {
                 PendingShopOpen.request(playerUuid);
             } else if ("offer_guide".equals(action)) {
-                GuideState.startGuiding(conversation.npcId());
+                GuideState.startGuiding(conversation.npcId(), guideTargetFor(content));
             }
         });
         // ThreatMemory is live (a threat can appear/disappear mid-conversation)
@@ -120,5 +126,15 @@ public class PlayerChatToAIListener {
                 fullSituation);
 
         return event;
+    }
+
+    private static GuideState.Target guideTargetFor(String playerText) {
+        String lower = playerText.toLowerCase();
+        for (String keyword : WATER_KEYWORDS) {
+            if (lower.contains(keyword)) {
+                return GuideState.Target.NEAREST_WATER;
+            }
+        }
+        return GuideState.Target.NEAREST_LANDMARK;
     }
 }
