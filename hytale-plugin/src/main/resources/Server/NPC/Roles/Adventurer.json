@@ -24,7 +24,7 @@
   "MotionControllerList": [
     {
       "Type": "Walk",
-      "MaxWalkSpeed": 5,
+      "MaxWalkSpeed": 8,
       "Gravity": 10,
       "RunThreshold": 0.3,
       "MaxFallSpeed": 15,
@@ -90,13 +90,14 @@
               }
             },
             {
-              "$Comment": "Adventurer-specific: notice nearby hostile creatures, mirroring the real Trork combat AI's own threat sensor (Type: Mob, Prioritiser: Attitude/Hostile) - feeds npc-ai-stack's ThreatMemory so the AI can react to it in conversation",
+              "$Comment": "Adventurer-specific: notice nearby hostile creatures, mirroring the real Trork combat AI's own threat sensor (Type: Mob, Prioritiser: Attitude/Hostile) - feeds npc-ai-stack's ThreatMemory so the AI can react to it in conversation. LockOnTarget makes the found hostile the locked \"Target\" the chase/attack nodes below react to.",
               "Continue": true,
               "Sensor": {
                 "Type": "Mob",
                 "Range": 30,
                 "GetPlayers": false,
                 "GetNPCs": true,
+                "LockOnTarget": true,
                 "Prioritiser": {
                   "Type": "Attitude",
                   "AttitudesByPriority": [ "Hostile" ]
@@ -146,7 +147,46 @@
               ]
             },
             {
-              "$Comment": "Companion mode: once tamed, seek toward the nearest player instead of standing still. The Seek/MaintainDistance BodyMotion types are real, shipped engine functionality (confirmed via disassembly and via the real Template_Livestock.json's own tamed-animal follow behavior), not custom pathfinding code. v1 simplification: follows the nearest player, not specifically its owner - correct for solo/small-group testing, would need real owner-specific entity filtering for a populated multiplayer world (see CompanionState.java's javadoc)",
+              "$Comment": "Companion combat, melee range: once tamed, if a hostile is locked as Target and close enough, attack it. Real \"Attack\" action (confirmed via disassembly of BuilderActionAttack, and via real shipped usage in Component_Instruction_Attack_Sequence_Spirit.json/Component_Instruction_Intelligent_Idle_Goblin.json) - \"Root_NPC_Attack_Melee\" is the same generic melee attack pattern the real, shipped Tamed_Cow.json uses, not a made-up interaction id. This node has no Continue, so it takes priority over chasing/following below whenever it matches.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  { "Type": "Target", "Range": 3 }
+                ]
+              },
+              "Actions": [
+                {
+                  "Type": "Attack",
+                  "Attack": "Root_NPC_Attack_Melee",
+                  "AttackPauseRange": [ 1, 2 ]
+                }
+              ],
+              "HeadMotion": {
+                "Type": "Watch"
+              },
+              "BodyMotion": {
+                "Type": "Nothing"
+              }
+            },
+            {
+              "$Comment": "Companion combat, chase: hostile locked as Target but not yet in melee range - close the distance. Takes priority over following the player (no Continue) whenever a hostile is being chased.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  { "Type": "Target", "Range": 20 }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 1,
+                "StopDistance": 2,
+                "RelaxedMoveConstraints": false
+              }
+            },
+            {
+              "$Comment": "Companion mode: once tamed, seek toward the nearest player instead of standing still (no hostile currently being fought/chased - see the two nodes above, which take priority). The Seek/MaintainDistance BodyMotion types are real, shipped engine functionality (confirmed via disassembly and via the real Template_Livestock.json's own tamed-animal follow behavior), not custom pathfinding code. v1 simplification: follows the nearest player, not specifically its owner - correct for solo/small-group testing, would need real owner-specific entity filtering for a populated multiplayer world (see CompanionState.java's javadoc)",
               "Sensor": {
                 "Type": "And",
                 "Sensors": [
@@ -156,7 +196,7 @@
               },
               "BodyMotion": {
                 "Type": "Seek",
-                "RelativeSpeed": 0.8,
+                "RelativeSpeed": 0.9,
                 "StopDistance": 3,
                 "RelaxedMoveConstraints": false
               }

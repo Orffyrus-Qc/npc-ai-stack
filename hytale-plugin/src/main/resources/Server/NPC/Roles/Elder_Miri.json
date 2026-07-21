@@ -24,7 +24,7 @@
   "MotionControllerList": [
     {
       "Type": "Walk",
-      "MaxWalkSpeed": 5,
+      "MaxWalkSpeed": 8,
       "Gravity": 10,
       "RunThreshold": 0.3,
       "MaxFallSpeed": 15,
@@ -137,7 +137,7 @@
               },
               "BodyMotion": {
                 "Type": "Seek",
-                "RelativeSpeed": 0.8,
+                "RelativeSpeed": 0.9,
                 "StopDistance": 3,
                 "RelaxedMoveConstraints": false
               }

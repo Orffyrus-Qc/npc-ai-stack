@@ -1,5 +1,44 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-21: adventurer companions can actually fight, and move faster
+
+Requested: can the adventurer actually fight alongside the player, and can
+companions keep pace when the player sprints.
+
+**Faster movement.** `MaxWalkSpeed` bumped 5 → 8 on all four roles'
+`MotionControllerList`, and the companion-follow `Seek` speed bumped
+0.8 → 0.9, giving more headroom to keep pace with a sprinting player.
+
+**Real combat, not scripted.** Found the real, shipped `Attack` action
+(`BuilderActionAttack`/`ActionAttack`, confirmed via disassembly, with two
+real usage examples in shipped combat JSON -
+`Component_Instruction_Attack_Sequence_Spirit.json` and
+`Component_Instruction_Intelligent_Idle_Goblin.json`). `Adventurer.json`'s
+existing hostile-detection sensor (`"Mob"` + `"Attitude"` prioritiser,
+already built for conversation-context awareness) now also sets
+`"LockOnTarget": true`, making the detected hostile the locked `"Target"`
+two new priority-ordered Instructions nodes react to: chase (`BodyMotion:
+Seek` toward the target, full speed, up to 20 blocks) and attack (`"Type":
+"Attack", "Attack": "Root_NPC_Attack_Melee"` once within 3 blocks - the
+same generic melee attack pattern the real, shipped `Tamed_Cow.json` uses
+defensively, not a made-up interaction id). Both gated on `IsCompanion`,
+and both take priority over merely following the player (no `Continue`,
+so combat wins whenever a hostile is locked).
+
+**Simplification, stated plainly**: combat engagement is tied to
+companion status + hostile presence, not to the specific per-message
+`OFFER_FIGHT`/`OFFER_GUIDE` decision the AI makes in conversation (that
+decision still shapes what the NPC *says* about helping, via
+`llm_client.py`'s rules) - a tamed companion will engage any hostile it
+detects while following, regardless of what it said the last time it was
+asked. Wiring actual combat willingness to the specific decision is a
+reasonable follow-up if the difference ever matters in practice.
+
+Boot-tested clean (no validation errors for the new `Attack`/`Target`/
+`LockOnTarget` JSON, referencing a real attack pattern) - **not yet
+confirmed live with an actual fight against a real hostile creature**,
+since that needs a connected player near a real monster to watch.
+
 ## 2026-07-21: companions can actually move now - real Seek/follow behavior
 
 Requested: a tamed NPC that agrees to follow the player should actually
