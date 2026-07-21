@@ -92,6 +92,8 @@ public class PlayerChatToAIListener {
                 PendingShopOpen.request(playerUuid);
             } else if ("accept_tame".equals(action)) {
                 CompanionState.markCompanion(conversation.npcId());
+            } else if ("offer_guide".equals(action)) {
+                GuideState.startGuiding(conversation.npcId());
             }
         });
         // ThreatMemory is live (a threat can appear/disappear mid-conversation)

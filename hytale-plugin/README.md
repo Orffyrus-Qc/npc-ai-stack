@@ -1,5 +1,56 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-21: NPCs can actually lead you to a landmark, not just describe it
+
+Requested: once an NPC follows the player, the next step is for it to be
+able to *lead* the player somewhere - e.g. "lead me to the closest river" -
+by actually walking there, not just talking about it.
+
+**The mechanism.** When the AI decides `OFFER_GUIDE`, `GuideState.
+startGuiding(npcId)` now flips a persistent flag (new `GuideState.java`,
+same `ConcurrentHashMap`-per-npcId shape as `CompanionState`). A new
+`SeekLandmark` sensor (`SeekLandmarkSensorBuilder`/`SeekLandmarkSensor`)
+checks that flag every tick and, if set, hands `NearbyLandmarks.
+closestPosition(npcId)` (a `Vector3i` the existing zone-search code -
+already used to *describe* the nearest landmark in conversation - was
+extended to also cache raw, not just formatted-string) to a paired
+`"Type": "Seek"` `BodyMotion` as a target coordinate. The sensor
+auto-stops matching (and calls `GuideState.stopGuiding`) once the NPC is
+within 6 blocks of the target, so no separate arrival-check node is
+needed. All four roles got one new Instructions node for this, placed
+after combat (Adventurer only) but before the companion-follow-player
+node, so guiding takes priority over idly following but combat still
+wins if a hostile is being fought.
+
+**The key discovery**: `PositionProvider` (the same concrete class
+`NoteNearbyThreatAction` and friends already use to read a Sensor's
+target) has a public no-arg constructor and a `setTarget(double, double,
+double)` overload for raw coordinates, and - confirmed via disassembly
+(`InfoProviderBase implements InfoProvider`) - is itself directly usable
+as a Sensor's `getSensorInfo()` return value. So a custom Sensor can hand
+a fixed world coordinate, not just a matched entity, to a paired `Seek`
+BodyMotion. No pathfinding API was written or needed; `Seek` is the same
+real, shipped movement primitive used for chase/follow (see the section
+below).
+
+**A real bug found by the boot-test, not by guessing**: the first version
+failed role validation on all four files with `At least one of required
+features player target, NPC target, dropped item target, vector position
+must be provided at ...BodyMotion|Seek`. Disassembled the engine's own
+`RequiresOneOfFeaturesValidator` and `BuilderBase` to find the real
+mechanism: a Sensor builder must explicitly call `provideFeature(Feature.
+Position)` during `readConfig()` to declare (at load time, not runtime)
+that it can supply a vector position - confirmed by finding the exact
+same call in the real, shipped `BuilderSensorReadPosition`. Added the same
+call to `SeekLandmarkSensorBuilder.readConfig()`; the boot-test then came
+back clean on all four roles.
+
+Boot-tested clean (no `FAIL`/`SEVERE` tied to `SeekLandmark` across
+`Adventurer.json`, `AI_Talker.json`, `Elder_Miri.json`,
+`Merchant_Oskar.json`; server boots and the plugin enables) - **not yet
+confirmed live**: needs a real player to ask an NPC to guide them
+somewhere and watch it actually walk there and stop on arrival.
+
 ## 2026-07-21: adventurer companions can actually fight, and move faster
 
 Requested: can the adventurer actually fight alongside the player, and can

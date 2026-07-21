@@ -111,6 +111,11 @@ public class TalkToAIAction extends ActionBase {
                 // further validation needed here, just flip the flag
                 // IsCompanionSensor checks every tick.
                 CompanionState.markCompanion(npcId);
+            } else if ("offer_guide".equals(action)) {
+                // SeekLandmarkSensor checks this every tick and walks toward
+                // NearbyLandmarks.closestPosition(npcId), auto-stopping once
+                // arrived - see both classes' javadoc.
+                GuideState.startGuiding(npcId);
             }
         });
 

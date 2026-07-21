@@ -141,7 +141,19 @@
               ]
             },
             {
-              "$Comment": "Companion mode: once tamed, seek toward the nearest player instead of standing still. The Seek/MaintainDistance BodyMotion types are real, shipped engine functionality (confirmed via disassembly and via the real Template_Livestock.json's own tamed-animal follow behavior), not custom pathfinding code. v1 simplification: follows the nearest player, not specifically its owner - correct for solo/small-group testing, would need real owner-specific entity filtering for a populated multiplayer world (see CompanionState.java's javadoc)",
+              "$Comment": "Guiding: the AI decided OFFER_GUIDE (see llm_client.py) and GuideState.startGuiding() was called - walk toward NearbyLandmarks.closestPosition() until SeekLandmarkSensor reports arrival (it stops matching automatically). Takes priority over merely following the player (no Continue).",
+              "Sensor": {
+                "Type": "SeekLandmark"
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 1,
+                "StopDistance": 2,
+                "RelaxedMoveConstraints": false
+              }
+            },
+            {
+              "$Comment": "Companion mode: once tamed, seek toward the nearest player instead of standing still (not actively guiding - see the node above, which takes priority). The Seek/MaintainDistance BodyMotion types are real, shipped engine functionality (confirmed via disassembly and via the real Template_Livestock.json's own tamed-animal follow behavior), not custom pathfinding code. v1 simplification: follows the nearest player, not specifically its owner - correct for solo/small-group testing, would need real owner-specific entity filtering for a populated multiplayer world (see CompanionState.java's javadoc)",
               "Sensor": {
                 "Type": "And",
                 "Sensors": [

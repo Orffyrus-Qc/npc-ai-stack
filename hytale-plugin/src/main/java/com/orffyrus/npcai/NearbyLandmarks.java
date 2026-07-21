@@ -51,6 +51,9 @@ public final class NearbyLandmarks {
     private static final int MAX_RESULTS = 2;
 
     private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
+    /** Closest landmark's real world coordinate per NPC - what GuideState-driven
+     * SeekLandmarkSensor actually walks the NPC toward when asked to guide. */
+    private static final Map<String, Vector3i> CLOSEST_POSITION = new ConcurrentHashMap<>();
 
     private NearbyLandmarks() { }
 
@@ -63,7 +66,7 @@ public final class NearbyLandmarks {
     public static String describe(String npcId, Ref<EntityStore> npcRef, Store<EntityStore> store) {
         return CACHE.computeIfAbsent(npcId, id -> {
             try {
-                return compute(npcRef, store);
+                return compute(id, npcRef, store);
             } catch (Exception e) {
                 LOGGER.atWarning().log("NearbyLandmarks failed for " + id + ": " + e);
                 return "";
@@ -71,7 +74,16 @@ public final class NearbyLandmarks {
         });
     }
 
-    private static String compute(Ref<EntityStore> npcRef, Store<EntityStore> store) {
+    /**
+     * The closest landmark's real coordinate, or null if describe() hasn't
+     * been called yet for this NPC (or found nothing). describe() always
+     * populates this as a side effect - see compute().
+     */
+    public static Vector3i closestPosition(String npcId) {
+        return CLOSEST_POSITION.get(npcId);
+    }
+
+    private static String compute(String npcId, Ref<EntityStore> npcRef, Store<EntityStore> store) {
         TransformComponent tc = store.getComponent(npcRef, TransformComponent.getComponentType());
         if (tc == null) return "";
         WorldChunk chunk = tc.getChunk();
@@ -86,6 +98,7 @@ public final class NearbyLandmarks {
 
         Zone[] zones = cg.getZonePatternProvider().getZones();
         List<String> found = new ArrayList<>();
+        Map<String, Vector3i> hitByDescription = new java.util.HashMap<>();
         int checked = 0;
         for (Zone zone : zones) {
             if (zone.discoveryConfig() == null || !zone.discoveryConfig().display()) {
@@ -111,14 +124,17 @@ public final class NearbyLandmarks {
             if (hit != null) {
                 int dx = hit.x - x, dz = hit.z - z;
                 int distance = (int) Math.round(Math.hypot(dx, dz));
-                found.add(distance + "|" + prettify(displayName) + " to the " + compassDirection(dx, dz)
-                        + " (~" + distance + " blocks)");
+                String key = distance + "|" + prettify(displayName) + " to the " + compassDirection(dx, dz)
+                        + " (~" + distance + " blocks)";
+                found.add(key);
+                hitByDescription.put(key, hit);
             }
         }
         if (found.isEmpty()) return "";
         found.sort((a, b) -> Integer.compare(
                 Integer.parseInt(a.substring(0, a.indexOf('|'))),
                 Integer.parseInt(b.substring(0, b.indexOf('|')))));
+        CLOSEST_POSITION.put(npcId, hitByDescription.get(found.get(0)));
         StringBuilder sb = new StringBuilder("Nearby landmarks you know of: ");
         for (int i = 0; i < Math.min(MAX_RESULTS, found.size()); i++) {
             if (i > 0) sb.append("; ");
