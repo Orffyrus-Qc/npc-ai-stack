@@ -28,37 +28,42 @@
 ```text
 ╔══════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                      ║
-║  ⚠⚠⚠  STOP. READ THIS BEFORE YOU POINT A REAL SERVER AT THIS.  ⚠⚠⚠                   ║
+║  ⚠⚠⚠  READ THIS BEFORE YOU POINT A REAL SERVER AT THIS.  ⚠⚠⚠                         ║
 ║                                                                                      ║
-║  THIS PROJECT IS UNDER CONSTRUCTION.                                                 ║
-║  IT HAS NOT RUN END-TO-END AGAINST A REAL HYTALE SERVER YET.                         ║
+║  THIS PROJECT IS ACTIVELY EVOLVING, DAY BY DAY.                                      ║
+║  IT HAS RUN END-TO-END AGAINST A REAL HYTALE SERVER - CONFIRMED LIVE,                ║
+║  REPEATEDLY, INCLUDING A REAL MULTI-TURN CONVERSATION WITH A REAL PLAYER.            ║
 ║                                                                                      ║
-║  YOU ARE ENTERING A FALLING COW ZONE.                                                ║
-║  Expect missing pieces, wrong API names, and designs that may                        ║
-║  change without mercy.                                                               ║
+║  YOU ARE STILL ENTERING A FALLING COW ZONE.                                          ║
+║  Confirmed-working and reasoned-not-yet-verified sit side by side in this            ║
+║  repo - CLAUDE.md and hytale-plugin/README.md both keep an honest, dated             ║
+║  table of exactly which is which. Read those before assuming anything.              ║
 ║                                                                                      ║
-║  DO NOT treat this repo as a production NPC brain.                                   ║
-║  DO NOT assume NpcAiBridge.java compiles against your HytaleServer.jar.              ║
+║  DO NOT treat this repo as a hardened, load-tested production NPC brain              ║
+║  (yet) - real players so far means "one, at a time."                                ║
 ║  DO NOT let the skill self-improvement loop run unattended against                   ║
 ║  a live player-facing world without watching the sandbox logs.                       ║
 ║                                                                                      ║
 ║  HYTALE IS EARLY ACCESS -- PLUGIN APIS MOVE BETWEEN BUILDS.                          ║
-║  GPU/PARALLEL-SLOT TUNING KNOBS ARE STARTING POINTS, NOT BENCHMARKS.                 ║
+║  GPU/PARALLEL-SLOT TUNING NUMBERS ARE MEASURED ON ONE RTX 3060 12GB,                 ║
+║  NOT A UNIVERSAL BENCHMARK.                                                          ║
 ║                                                                                      ║
-║  If something here works someday, that will be a pleasant surprise --                ║
-║  not a promise.                                                                      ║
+║  If something here doesn't work for you, that's a bug worth reporting -              ║
+║  not the expected outcome anymore.                                                   ║
 ║                                                                                      ║
-║  Status:  🚧 UNDER CONSTRUCTION  ·  🧪 UNTESTED ON REAL SERVER  ·  🐄 FALLING COW ZONE  ║
+║  Status:  🧪 ACTIVELY EVOLVING  ·  ✅ CONFIRMED LIVE END-TO-END  ·  🐄 FALLING COW ZONE ║
 ║                                                                                      ║
 ╚══════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
-> ### 🐄 Huge disclaimer (again, on purpose)
+> ### 🐄 Huge disclaimer (still here, on purpose)
 >
-> **Falling Cow Zone** means: experimental self-improving NPC stack, not
-> field-tested against a real Hytale server, not certified, not a finished
-> mod. Use at your own risk. If a cow falls on your deployment schedule,
-> that is expected weather in this zone.
+> **Falling Cow Zone** means: a self-improving NPC stack that has been
+> confirmed live against a real Hytale server, but is still young,
+> single-player-tested, and evolving fast - not certified, not a finished
+> mod, not load-tested at real population scale. Use at your own risk. If a
+> cow falls on your deployment schedule, that is expected weather in this
+> zone.
 
 ### ✅ What's actually been verified (2026-07-20, RTX 3060 12GB)
 
@@ -86,10 +91,17 @@ stack was actually brought up against a real GPU and exercised end to end:
   and `personality.py` had an unbound SQL placeholder that only surfaces
   as an error against a real Postgres, not on read-through.
 
-**Still not tested**: an actual Hytale server/client, `NpcAiBridge.java`
-against real plugin APIs, sustained multi-NPC load, or `skill_writer.py`
-against the real GPU (it was only verified with a fake LLM/DB — see
-[the skill self-improvement section](#the-skill-writer-meta-agent)).
+**Superseded since**: this run used a fake WebSocket client and the old
+`--parallel 4` config. Both "not tested" items below it were later actually
+tested for real - see the sections that follow, and
+[CLAUDE.md](CLAUDE.md) for the full dated history: a real Hytale
+server/client and `NpcAiBridge.java` against real plugin APIs (confirmed
+live, repeatedly, including real multi-turn conversation), and
+`skill_writer.py` against the real GPU (2026-07-21 - found and fixed a real
+prompt-hallucination bug the fake-LLM run couldn't have caught). **Still
+genuinely not tested**: sustained multi-NPC/multi-player load (the GPU load
+test below was a synthetic concurrency benchmark, not hours of real
+traffic).
 
 ### 🐄 The Hytale plugin scaffold: from bytecode-verified to actually booted
 
@@ -115,9 +127,15 @@ call that made the NPC role unspawnable, and a dropped animation-reset
 instruction that left it stuck), **a real player spawned the NPC, clicked
 it, and the orchestrator's logs showed real, repeated round trips** —
 Qdrant memory recall, an actual LLM call, episodic memory writes — on every
-click. The reply is now also sent back as an in-game chat message. Read
+click. The reply is now also sent back as an in-game chat message, and
+**multi-turn conversation is confirmed live too** - typing a follow-up in
+normal chat continues talking to the same NPC. Read
 [`hytale-plugin/README.md`](hytale-plugin/README.md) for the full
-blow-by-blow and what's still unverified (multi-turn conversation, mainly).
+blow-by-blow and its own dated "what's real vs. still unverified" table -
+the honest list has moved on since (companion-follow, real combat, guiding
+players to landmarks, a barter shop, and - added 2026-07-21 - reporting a
+player attacking an NPC as a real personality-affecting outcome, boot-tested
+but not yet confirmed against a live attack).
 
 ---
 
@@ -129,7 +147,7 @@ memory, sandboxed skill self-improvement, all on one box with one small GPU.
 ### Status badge (honest edition)
 
 ```text
-🚧 UNDER CONSTRUCTION · 🧪 UNTESTED ON REAL SERVER · 🐄 FALLING COW ZONE
+🧪 ACTIVELY EVOLVING · ✅ CONFIRMED LIVE END-TO-END · 🐄 FALLING COW ZONE
 ```
 
 ## What this does in Hytale
@@ -156,12 +174,18 @@ memory, sandboxed skill self-improvement, all on one box with one small GPU.
   skills get proposed, run through validation in a locked-down, networkless
   container, and only reach live NPCs if they pass — bad candidates get
   logged and rejected instead of shipped. Facts and personality can update
-  live; actual decision-making code can't sneak in unvalidated.
+  live; actual decision-making code can't sneak in unvalidated. As of
+  2026-07-21, approved skills actually run - for ambient/idle behavior only
+  so far, not real dialogue (see [the skill self-improvement
+  section](#skill-self-improvement-flow)).
 
-> 🐄 **Cow note:** all of the above describes the intended in-game
-> experience once `NpcAiBridge.java` is wired into real Hytale NPC event
-> hooks — that wiring, and a live playtest against an actual server, are
-> both still outstanding (see the warning box up top).
+> 🐄 **Cow note:** all of the above is now real, not just intended -
+> `NpcAiBridge.java` is wired into real Hytale NPC event hooks and a real
+> player has held a real multi-turn conversation with a real in-game NPC
+> through this exact path (see the verified section above and CLAUDE.md's
+> dated history). What's still genuinely open: sustained multi-player load,
+> and a handful of specific outcome types that need game systems
+> (inventory, quests) that don't exist yet - see CLAUDE.md's roadmap.
 
 ### Worked example: one blacksmith, three visits
 
@@ -178,6 +202,14 @@ everyone*, while their trust specifically in you drops the most. Leave
 them alone for a couple of in-game weeks and both effects decay back
 toward baseline.
 
+> 🐄 **Cow note on this table:** the personality math itself (`personality.py`)
+> has always been real. What's new is what actually *triggers* it from real
+> gameplay: `player_was_kind`/`player_was_rude` are inferred from every real
+> dialogue turn, and `player_attacked_npc` from a real "Damage" sensor
+> (boot-tested, not yet confirmed against a live attack) - both added
+> 2026-07-21. `player_gave_gift` in the row above is still aspirational -
+> there's no gift-giving mechanic in the game plugin yet to trigger it.
+
 ## Layout
 
 ```
@@ -188,16 +220,18 @@ orchestrator/
   llm_client.py             prompt builder (personality+memory -> system prompt) + llama.cpp client
   memory.py                 Qdrant episodic + Postgres semantic facts + compression
   personality.py            bounded trait nudges, per-player trust, decay to baseline
+  skill_runtime.py          loads sandbox/approved/ skills, runs them for ambient/idle ticks
   skill_writer.py           offline meta-agent: outcome history -> candidate skills
 sandbox/
   run_skill_validation.sh   ephemeral locked-down containers for candidate skills
   skill_harness.py          the tests a skill must pass to be promoted
+  skill_runner.py           runs one approved skill's decide() as an isolated subprocess
 scripts/download_model.sh   fetch Qwen2.5-7B-Instruct GGUF
 hytale-plugin/               Gradle project - see hytale-plugin/README.md
   src/main/java/com/orffyrus/npcai/
     NpcAiBridge.java        plugin-side transport (no Hytale API coupling)
     NpcAiPlugin.java        entry point (extends JavaPlugin)
-    NpcInteractListener.java  wires PlayerInteractEvent -> the bridge
+    TalkToAIAction.java / PlayerChatToAIListener.java  the real hooks into the bridge
 ```
 
 ## Bring-up
@@ -314,8 +348,13 @@ docker compose run --rm skill-writer --npc-id blacksmith_01 --since-days 7
 > orchestrator's dialogue-priority slot arbiter entirely. Running it while
 > players are online will compete with real dialogue for the same
 > `--parallel` slots — only run it during a confirmed low-player window,
-> same rule as `run_skill_validation.sh`. Verified end-to-end with a fake
-> LLM/DB locally; not yet run against the real GPU/model.
+> same rule as `run_skill_validation.sh`. Run against the real GPU/model for
+> the first time on 2026-07-21 (previously only verified with a fake
+> LLM/DB) - found a real, repeatable bug the fake run couldn't have caught:
+> the model confused outcome-history counts shown as prompt *context* with
+> actual live `state` keys/values, producing candidates that passed shape
+> validation but were functionally dead. Fixed in the prompt and with a new
+> static check that rejects it - see CLAUDE.md for the full story.
 
 CI runs a fast copy of this gate on every push/PR touching `sandbox/**`
 (see [`.github/workflows/skill-validation.yml`](.github/workflows/skill-validation.yml)):
