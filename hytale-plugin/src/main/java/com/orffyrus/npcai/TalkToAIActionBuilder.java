@@ -32,7 +32,14 @@ public class TalkToAIActionBuilder extends BuilderActionBase {
 
     @Override
     public TalkToAIActionBuilder readConfig(JsonElement json) {
-        readCommonConfig(json);
+        // Deliberately NOT calling readCommonConfig(json) here. The real,
+        // shipped BuilderActionOpenBarterShop.readConfig() (disassembled
+        // from HytaleServer.jar) does not call it either - only its own
+        // shop-specific fields. Calling it ourselves produced mysterious
+        // "FAIL: ... Once" / "FAIL: ... Enabled" validation errors at boot
+        // that made the resulting NPC role unspawnable ("Can't find a
+        // matching role builder"). The framework evidently invokes
+        // readCommonConfig() separately as part of the builder pipeline.
         return this;
     }
 
