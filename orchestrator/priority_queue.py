@@ -29,7 +29,7 @@ logger = logging.getLogger("npc.priority_queue")
 # better than a silent pause, and rotating through several avoids the NPC
 # saying the exact same filler line every time it happens (the same
 # repetition complaint that motivated dialogue()'s repeat_penalty).
-_BUSY_LINES = (
+BUSY_LINES = (
     "Hold that thought a moment...",
     "Let me think on that for a moment.",
     "One moment, if you would.",
@@ -104,8 +104,8 @@ class NPCRequestDispatcher:
     def _default_fallback(npc_id: str, priority: Priority) -> str:
         if priority is Priority.DIALOGUE:
             # An in-character "give me a moment" rather than a flat "..." or
-            # the game silently stalling - see _BUSY_LINES above.
-            return random.choice(_BUSY_LINES)
+            # the game silently stalling - see BUSY_LINES above.
+            return random.choice(BUSY_LINES)
         return ""  # ambient ticks silently no-op when the GPU is busy
 
     async def request_dialogue(

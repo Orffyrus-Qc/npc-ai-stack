@@ -43,7 +43,21 @@ services:
   orchestrator:
     build: ./orchestrator
     ports:
-      - "8765:8765"          # WebSocket for the Hytale Java plugin
+      # loopback-only, same reasoning as llm-inference above: this has zero
+      # auth (any peer that can reach it can forge dialogue/outcome messages -
+      # impersonate a player_id to manipulate trust/personality, force
+      # taming, or flood GPU slots) and the plugin only ever needs
+      # ws://localhost:8765 per this file's own top-of-file comment - there's
+      # no legitimate reason for this to be reachable off-host.
+      - "127.0.0.1:8765:8765"
+    environment:
+      - SANDBOX_DIR=/sandbox
+    volumes:
+      # Read-only: orchestrator/skill_runtime.py only ever reads
+      # approved/*.py plus skill_harness.py/skill_runner.py - it must never
+      # be able to write here (candidates/rejected/ are skill-writer's and
+      # run_skill_validation.sh's alone to manage).
+      - ./sandbox:/sandbox:ro
     depends_on:
       llm-inference:
         condition: service_healthy

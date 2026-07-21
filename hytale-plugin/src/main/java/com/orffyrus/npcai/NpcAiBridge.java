@@ -16,6 +16,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.util.UUID;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -33,14 +35,39 @@ public class NpcAiBridge implements WebSocket.Listener {
         void onSay(String npcId, String text, String action, boolean isCompanion);
     }
 
+    /** How long an in-flight request's handler is kept waiting for a reply
+     * before being reaped - well past the orchestrator's own dialogue
+     * budget (3s slot wait + 6s call timeout, see priority_queue.py), so
+     * anything still pending this long means the reply is never coming
+     * (orchestrator restarted, connection dropped mid-flight, etc). Keeps
+     * pendingReplies bounded even under sustained connection trouble. */
+    private static final long PENDING_REPLY_TTL_MILLIS = 20_000;
+
+    private record PendingReply(SayHandler handler, long sentAtMillis) { }
+
     private volatile WebSocket ws;
     private final URI uri;
     private final StringBuilder partial = new StringBuilder();
-    /** npcId -> callback. Register when an NPC entity spawns. */
-    private final ConcurrentHashMap<String, SayHandler> sayHandlers =
+    /** req_id -> pending reply handler, one-shot: consumed and removed the
+     * moment its reply arrives (or reaped by sweepStalePendingReplies() if
+     * it never does). Keyed per-REQUEST rather than per-NPC on purpose -
+     * an earlier version keyed this by npcId alone, so two players talking
+     * to the same NPC entity concurrently (e.g. both chatting with a single
+     * shared "Elder_Miri") would silently steal each other's handler: the
+     * second player's registration overwrote the first's, so whichever
+     * reply arrived later got delivered through the wrong player's
+     * callback - one player's private conversation text landing in
+     * another's chat, or a reply just vanishing for whoever got
+     * overwritten. req_id is already generated fresh per call and already
+     * echoed back verbatim by the orchestrator (see main.py's "say"
+     * response) - this just actually uses it. */
+    private final ConcurrentHashMap<String, PendingReply> pendingReplies =
             new ConcurrentHashMap<>();
 
-    public NpcAiBridge(String url) { this.uri = URI.create(url); }
+    public NpcAiBridge(String url) {
+        this.uri = URI.create(url);
+        scheduleReplySweep();
+    }
 
     public void connect() {
         HttpClient.newHttpClient().newWebSocketBuilder()
@@ -61,11 +88,21 @@ public class NpcAiBridge implements WebSocket.Listener {
         }, 5000);
     }
 
-    public void registerNpc(String npcId, SayHandler onSay) {
-        sayHandlers.put(npcId, onSay);
+    private void scheduleReplySweep() {
+        new java.util.Timer(true).scheduleAtFixedRate(new java.util.TimerTask() {
+            public void run() { sweepStalePendingReplies(); }
+        }, PENDING_REPLY_TTL_MILLIS, PENDING_REPLY_TTL_MILLIS);
     }
 
-    public void unregisterNpc(String npcId) { sayHandlers.remove(npcId); }
+    private void sweepStalePendingReplies() {
+        long now = System.currentTimeMillis();
+        for (Iterator<Map.Entry<String, PendingReply>> it = pendingReplies.entrySet().iterator();
+                it.hasNext(); ) {
+            if (now - it.next().getValue().sentAtMillis() > PENDING_REPLY_TTL_MILLIS) {
+                it.remove();
+            }
+        }
+    }
 
     /** Fire-and-forget: never block the game thread on this. */
     private void send(String json) {
@@ -75,18 +112,49 @@ public class NpcAiBridge implements WebSocket.Listener {
     }
 
     private static String esc(String v) {
-        return v.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", " ").replace("\r", " ");
+        // Escapes every JSON-illegal control character, not just \n/\r - a
+        // player chat message containing a raw tab or other C0 control byte
+        // (plausible from paste/clipboard input) used to pass through
+        // unescaped, producing invalid JSON that orchestrator-side
+        // json.loads() rejects outright, silently dropping that whole
+        // dialogue turn.
+        StringBuilder sb = new StringBuilder(v.length());
+        for (int i = 0; i < v.length(); i++) {
+            char c = v.charAt(i);
+            switch (c) {
+                case '\\': sb.append("\\\\"); break;
+                case '"': sb.append("\\\""); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+            }
+        }
+        return sb.toString();
     }
 
+    /**
+     * Sends a dialogue request and registers onSay against a fresh
+     * per-request id, atomically (registration happens before the request
+     * ever goes out) - see pendingReplies' javadoc for the cross-player bug
+     * this replaced.
+     */
     public void sendDialogue(String npcId, String npcName, String npcRole,
                              String playerId, String playerName,
-                             String playerText, String situation) {
+                             String playerText, String situation,
+                             SayHandler onSay) {
+        String reqId = UUID.randomUUID().toString();
+        pendingReplies.put(reqId, new PendingReply(onSay, System.currentTimeMillis()));
         send(String.format(
             "{\"type\":\"dialogue\",\"req_id\":\"%s\",\"npc_id\":\"%s\"," +
             "\"npc_name\":\"%s\",\"npc_role\":\"%s\",\"player_id\":\"%s\"," +
             "\"player_name\":\"%s\",\"text\":\"%s\",\"situation\":\"%s\"}",
-            UUID.randomUUID(), esc(npcId), esc(npcName), esc(npcRole),
+            reqId, esc(npcId), esc(npcName), esc(npcRole),
             esc(playerId), esc(playerName), esc(playerText), esc(situation)));
     }
 
@@ -99,10 +167,20 @@ public class NpcAiBridge implements WebSocket.Listener {
             esc(situation)));
     }
 
-    public void sendOutcome(String npcId, String playerId, String outcome) {
+    public void sendOutcome(String npcId, String npcRole, String playerId, String outcome) {
+        // npc_role is required here for the same reason sendDialogue/
+        // sendAmbient carry it: orchestrator-side handle_outcome() resolves
+        // this NPC's personality baseline from DEFAULT_BASELINES[npc_role]
+        // (main.py). If the very first event ever recorded for an npc_id is
+        // an outcome (plausible for e.g. a hostile encounter before any
+        // dialogue happened) and it arrived with no role, the NPC's baseline
+        // row would get created with the generic fallback baseline and stay
+        // wrong forever - personality.py's baseline is written once at row
+        // creation and never corrected afterward.
         send(String.format(
-            "{\"type\":\"outcome\",\"npc_id\":\"%s\",\"player_id\":\"%s\"," +
-            "\"outcome\":\"%s\"}", esc(npcId), esc(playerId), esc(outcome)));
+            "{\"type\":\"outcome\",\"npc_id\":\"%s\",\"npc_role\":\"%s\"," +
+            "\"player_id\":\"%s\",\"outcome\":\"%s\"}",
+            esc(npcId), esc(npcRole), esc(playerId), esc(outcome)));
     }
 
     // -- incoming ----------------------------------------------------------
@@ -122,16 +200,20 @@ public class NpcAiBridge implements WebSocket.Listener {
     private void handleMessage(String json) {
         // Tiny extraction to avoid a JSON dependency; swap in Gson/Jackson
         // (already on most plugin classpaths) for anything more complex.
+        String reqId = extract(json, "req_id");
         String npcId = extract(json, "npc_id");
         String text = extract(json, "text");
         String action = extract(json, "action");
         boolean isCompanion = extractBoolean(json, "is_companion");
-        if (npcId == null) return;
-        SayHandler handler = sayHandlers.get(npcId);
-        if (handler != null && text != null && !text.isEmpty()) {
+        if (reqId == null || npcId == null) return;
+        // One-shot: remove() instead of get() so a reply can never be
+        // delivered twice and a stale/duplicate message can't resurrect an
+        // already-answered handler.
+        PendingReply pending = pendingReplies.remove(reqId);
+        if (pending != null && text != null && !text.isEmpty()) {
             // IMPORTANT: hop back onto the game/entity thread before touching
             // world state - this callback arrives on the websocket thread.
-            handler.onSay(npcId, text, action != null ? action : "none", isCompanion);
+            pending.handler().onSay(npcId, text, action != null ? action : "none", isCompanion);
         }
     }
 

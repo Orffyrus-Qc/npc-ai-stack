@@ -245,12 +245,30 @@ Plugin connects to `ws://<host>:8765`. Protocol is documented at the top of
 2. Cron runs `run_skill_validation.sh` during low-player windows:
    each candidate executes in a `--network none --read-only` throwaway container
    against `skill_harness.py`.
-3. Pass -> timestamped copy in `approved/` (the registry the orchestrator loads).
-   Fail -> `rejected/` with logs. Every rejection is a future test case.
+3. Pass -> timestamped copy in `approved/`. Fail -> `rejected/` with logs.
+   Every rejection is a future test case.
 4. Rollback = delete the newest approved version.
 
+**Update (2026-07-21): step 3 is now real for the ambient/idle path.**
+`orchestrator/skill_runtime.py` mounts `sandbox/` read-only into the
+orchestrator (`docker-compose.yml`), matches each `approved/*.py` file to
+the `npc_id` it was written for (parsed from `skill_writer.py`'s own header
+docstring - never guessed from the filename, since `npc_id` itself can
+contain underscores), and calls its `decide(state)` for that NPC's ambient/
+idle ticks - see `main.py`'s `handle_ambient()`. Each call runs in a
+throwaway subprocess (`sandbox/skill_runner.py`) with a CPU/memory rlimit
+and a hard timeout+kill, and its output is re-validated against
+`skill_harness.py`'s own rules every single time, not just once at
+promotion. **Still not done:** only the `"say"` and `"idle"` actions have
+anywhere to go - `emote`/`walk_to`/`give_item`/`set_quest_flag`/
+`trade_offer` are accepted and logged but produce no in-game effect yet,
+since `NpcAiBridge`'s wire protocol has no handler for them. Skills also
+aren't consulted during real dialogue (only ambient/idle) - see
+`skill_runtime.py`'s docstring for why that's a deliberate scope boundary,
+not an oversight.
+
 The live loop can always adjust *facts* and *personality*; only *behavior
-code* goes through the sandbox gate. That split is what keeps a
+code* goes through the sandbox gate. That split is what's meant to keep a
 self-improving NPC from becoming a self-sabotaging server.
 
 ### The skill-writer meta-agent

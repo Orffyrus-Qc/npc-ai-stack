@@ -53,6 +53,19 @@ public final class GuideState {
     private GuideState() { }
 
     public static void startGuiding(String npcId, Target target) {
+        // If already guiding toward this same target, don't touch the
+        // start time - README notes "almost every reply decides
+        // OFFER_GUIDE," so a player who keeps chatting *during* an active
+        // guide used to silently reset the give-up clock on every single
+        // turn, defeating hasTimedOut() forever (the exact "stopped
+        // following after I talked to him" symptom the timeout exists to
+        // prevent - just triggered by talking DURING the guide instead of
+        // only once). A genuinely different target still gets a fresh
+        // window, same as starting from not-guiding at all.
+        Guiding existing = GUIDING.get(npcId);
+        if (existing != null && existing.target() == target) {
+            return;
+        }
         // Logged unconditionally (not just on a mode change) so a live test
         // can directly confirm the orchestrator's OFFER_GUIDE decision
         // actually reached this point, rather than inferring it indirectly

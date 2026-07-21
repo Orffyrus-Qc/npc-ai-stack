@@ -59,11 +59,23 @@ class TamingStore:
         existing_pet = await self.owned_npc_for_player(player_id)
         if existing_pet is not None:
             return False
-        async with self._pg.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO npc_taming (npc_id, owner_player_id, tamed_at) "
-                "VALUES ($1,$2,$3) ON CONFLICT (npc_id) DO NOTHING",
-                npc_id, player_id, time.time())
+        try:
+            async with self._pg.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO npc_taming (npc_id, owner_player_id, tamed_at) "
+                    "VALUES ($1,$2,$3) ON CONFLICT (npc_id) DO NOTHING",
+                    npc_id, player_id, time.time())
+        except asyncpg.UniqueViolationError:
+            # existing_pet above is only a point-in-time check, not a lock -
+            # if this same player's ACCEPT_TAME for a DIFFERENT npc_id landed
+            # concurrently (e.g. two companion candidates both decided to
+            # accept within the same couple seconds), both coroutines can
+            # pass that check before either commits. idx_taming_owner (UNIQUE
+            # on owner_player_id) is what actually catches it - the loser
+            # here just means "this player already has a pet as of right
+            # now", the same outcome existing_pet would have produced with
+            # slightly different timing.
+            return False
         return await self.get_owner(npc_id) == player_id
 
     async def release(self, npc_id: str) -> None:

@@ -27,7 +27,6 @@ public class PlayerChatToAIListener {
 
     private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
 
-    private static final long CONVERSATION_TIMEOUT_MILLIS = 5 * 60 * 1000L;
     private static final Set<String> EXIT_WORDS = Set.of("bye", "goodbye", "exit", "leave", "stop");
     // See GuideState.Target.NEAREST_WATER's javadoc: Hytale has no discrete
     // "lake"/"river" zone, only Ocean/Shallow_Ocean/Shore - this just decides
@@ -60,7 +59,7 @@ public class PlayerChatToAIListener {
         if (conversation == null) {
             return event;
         }
-        if (System.currentTimeMillis() - conversation.lastActivityMillis() > CONVERSATION_TIMEOUT_MILLIS) {
+        if (System.currentTimeMillis() - conversation.lastActivityMillis() > NpcAiPlugin.CONVERSATION_TIMEOUT_MILLIS) {
             NpcAiPlugin.ACTIVE_CONVERSATIONS.remove(playerUuid);
             return event;
         }
@@ -83,29 +82,6 @@ public class PlayerChatToAIListener {
         NpcAiPlugin.ACTIVE_CONVERSATIONS.put(playerUuid, conversation.refreshed());
 
         String npcName = conversation.npcName();
-        bridge.registerNpc(conversation.npcId(), (id, text, action, isCompanion) -> {
-            // Same staleness concern as TalkToAIAction: this fires on the
-            // WebSocket thread after the real LLM round trip, so re-resolve
-            // a fresh PlayerRef from the UUID instead of reusing `sender`.
-            LOGGER.atInfo().log("[" + npcName + "] " + text);
-            PlayerRef freshSender = Universe.get().getPlayer(playerUuid);
-            if (freshSender == null) {
-                LOGGER.atInfo().log("Player " + playerUuid + " no longer online, dropping reply from " + npcName);
-                return;
-            }
-            freshSender.sendMessage(Message.raw("[" + npcName + "] " + text));
-            // Resynced every reply from Postgres-backed taming truth - see
-            // the matching comment in TalkToAIAction for why this can't just
-            // ride on action=="accept_tame" alone.
-            if (isCompanion) {
-                CompanionState.markCompanion(conversation.npcId());
-            }
-            if ("open_shop".equals(action)) {
-                PendingShopOpen.request(playerUuid);
-            } else if ("offer_guide".equals(action)) {
-                GuideState.startGuiding(conversation.npcId(), guideTargetFor(content));
-            }
-        });
         // ThreatMemory is live (a threat can appear/disappear mid-conversation)
         // and re-checked fresh on every turn - only conversation.situation()
         // (static world geography) is safe to have cached once at conversation
@@ -123,7 +99,31 @@ public class PlayerChatToAIListener {
                 playerUuid.toString(),
                 sender.getUsername(),
                 content,
-                fullSituation);
+                fullSituation,
+                (id, text, action, isCompanion) -> {
+                    // Same staleness concern as TalkToAIAction: this fires on
+                    // the WebSocket thread after the real LLM round trip, so
+                    // re-resolve a fresh PlayerRef from the UUID instead of
+                    // reusing `sender`.
+                    LOGGER.atInfo().log("[" + npcName + "] " + text);
+                    PlayerRef freshSender = Universe.get().getPlayer(playerUuid);
+                    if (freshSender == null) {
+                        LOGGER.atInfo().log("Player " + playerUuid + " no longer online, dropping reply from " + npcName);
+                        return;
+                    }
+                    freshSender.sendMessage(Message.raw("[" + npcName + "] " + text));
+                    // Resynced every reply from Postgres-backed taming truth -
+                    // see the matching comment in TalkToAIAction for why this
+                    // can't just ride on action=="accept_tame" alone.
+                    if (isCompanion) {
+                        CompanionState.markCompanion(id);
+                    }
+                    if ("open_shop".equals(action)) {
+                        PendingShopOpen.request(playerUuid);
+                    } else if ("offer_guide".equals(action)) {
+                        GuideState.startGuiding(id, guideTargetFor(content));
+                    }
+                });
 
         return event;
     }

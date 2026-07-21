@@ -168,26 +168,65 @@ your trust in them is high enough that you'd truly agree.
 {shop_line}"""
 
 
+# Capping facts/memories by *count* alone (MAX_FACTS_COMPANION etc. above)
+# assumes each entry is short - true on average, but nothing enforces it,
+# and one real production incident already came from exactly this gap (an
+# unrelated caller wrapping a large summarization prompt in this same
+# template - see main.py's low_prio_llm fix). Facts/memories are free-form
+# LLM-generated text with no hard length cap of their own, so counts alone
+# can't guarantee the assembled prompt fits a 2048-token slot
+# (docker-compose.yml's --ctx-size/--parallel). This estimate doesn't need
+# to be exact, just conservative enough that the real tokenizer's count
+# stays under the true limit with margin for the chat template's own
+# overhead and this request's max_tokens completion budget.
+_CHARS_PER_TOKEN_ESTIMATE = 4
+_PROMPT_TOKEN_BUDGET = 1700
+
+
+def _approx_tokens(text: str) -> int:
+    return len(text) // _CHARS_PER_TOKEN_ESTIMATE
+
+
 def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict]:
     max_facts = MAX_FACTS_COMPANION if ctx.is_companion else MAX_FACTS
     max_memories = MAX_MEMORIES_COMPANION if ctx.is_companion else MAX_MEMORIES
-    facts = "\n".join(f"- {f}" for f in ctx.semantic_facts[:max_facts]) or "- (nothing notable)"
-    memories = "\n".join(f"- {m}" for m in ctx.recent_memories[:max_memories]) or "- (first meeting)"
+    # Both already ordered newest/most-relevant-first (get_facts' ORDER BY,
+    # recall_recent's sort) - trimming from the end below drops the oldest/
+    # least-relevant entries first.
+    facts_list = list(ctx.semantic_facts[:max_facts])
+    memories_list = list(ctx.recent_memories[:max_memories])
     shop_line = SHOP_LINE_UNAVAILABLE if ctx.is_tamed_by_anyone else SHOP_LINE_AVAILABLE
     location_line = f"Current situation: {ctx.location_hint}" if ctx.location_hint else ""
     companion_line = COMPANION_LINE if ctx.is_companion else ""
 
-    system = SYSTEM_TEMPLATE.format(
-        name=ctx.name,
-        role=ctx.role,
-        player_name=ctx.player_name or "a traveler whose name you haven't caught",
-        personality=ctx.personality.describe(),
-        location_line=location_line,
-        companion_line=companion_line,
-        facts=facts,
-        memories=memories,
-        shop_line=shop_line,
-    )
+    def render() -> str:
+        facts = "\n".join(f"- {f}" for f in facts_list) or "- (nothing notable)"
+        memories = "\n".join(f"- {m}" for m in memories_list) or "- (first meeting)"
+        return SYSTEM_TEMPLATE.format(
+            name=ctx.name,
+            role=ctx.role,
+            player_name=ctx.player_name or "a traveler whose name you haven't caught",
+            personality=ctx.personality.describe(),
+            location_line=location_line,
+            companion_line=companion_line,
+            facts=facts,
+            memories=memories,
+            shop_line=shop_line,
+        )
+
+    system = render()
+    budget = _PROMPT_TOKEN_BUDGET - _approx_tokens(player_utterance)
+    # Alternate trimming whichever list is currently longer so one can't be
+    # emptied to zero while the other stays fat - both are informative, and
+    # a companion with 100+ memories but 0 facts (or vice versa) reads worse
+    # than a slightly shorter version of both.
+    while _approx_tokens(system) > budget and (facts_list or memories_list):
+        if len(memories_list) >= len(facts_list) and memories_list:
+            memories_list.pop()
+        elif facts_list:
+            facts_list.pop()
+        system = render()
+
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": player_utterance},

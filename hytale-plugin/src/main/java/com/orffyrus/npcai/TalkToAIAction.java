@@ -86,47 +86,6 @@ public class TalkToAIAction extends ActionBase {
                 playerUuid,
                 new NpcAiPlugin.Conversation(npcId, npcName, aiRole, situation, System.currentTimeMillis()));
 
-        bridge.registerNpc(npcId, (id, text, action, isCompanion) -> {
-            // Fires on the WebSocket thread, ~1-2s after this method returns
-            // (real LLM round trip). The playerRef captured above may be
-            // stale by then, so re-resolve a fresh one from the UUID via
-            // Universe.get().getPlayer() rather than reusing it - the player
-            // may also have disconnected, hence the null check.
-            LOGGER.atInfo().log("[" + npcName + "] " + text);
-            PlayerRef freshPlayerRef = Universe.get().getPlayer(playerUuid);
-            if (freshPlayerRef == null) {
-                LOGGER.atInfo().log("Player " + playerUuid + " no longer online, dropping reply from " + npcName);
-                return;
-            }
-            freshPlayerRef.sendMessage(Message.raw("[" + npcName + "] " + text));
-            // Resynced from the orchestrator's Postgres-backed taming truth
-            // on EVERY reply, not just when action=="accept_tame" - the
-            // plugin's own CompanionState is a plain in-memory map that
-            // resets on every server restart, while Postgres doesn't, so a
-            // previously-tamed NPC would otherwise never follow again after
-            // a restart (the model has no reason to re-decide ACCEPT_TAME
-            // for a player it already considers a companion).
-            if (isCompanion) {
-                CompanionState.markCompanion(npcId);
-            }
-            if ("open_shop".equals(action)) {
-                // Only queues the request (thread-safe, no Store access here) -
-                // see PendingShopOpen's javadoc for why the actual PageManager
-                // call happens later, on the tick thread, in
-                // OpenShopIfRequestedAction instead of directly here.
-                PendingShopOpen.request(playerUuid);
-            } else if ("offer_guide".equals(action)) {
-                // SeekLandmarkSensor checks this every tick and walks toward
-                // the target NearbyLandmarks resolves, auto-stopping once
-                // arrived - see both classes' javadoc. No real player free-
-                // text is available here (this fires from a click, not
-                // chat - playerText below is a canned string), so there's
-                // nothing to keyword-match for a water request; always the
-                // generic nearest-landmark mode.
-                GuideState.startGuiding(npcId, GuideState.Target.NEAREST_LANDMARK);
-            }
-        });
-
         String threat = ThreatMemory.describe(npcId);
         String fullSituation = threat.isEmpty() ? situation : situation + " " + threat;
 
@@ -137,7 +96,51 @@ public class TalkToAIAction extends ActionBase {
                 playerUuid.toString(),
                 playerRef.getUsername(),
                 "(the player approaches and interacts with you)",
-                fullSituation);
+                fullSituation,
+                (id, text, action, isCompanion) -> {
+                    // Fires on the WebSocket thread, ~1-2s after this method
+                    // returns (real LLM round trip). The playerRef captured
+                    // above may be stale by then, so re-resolve a fresh one
+                    // from the UUID via Universe.get().getPlayer() rather
+                    // than reusing it - the player may also have
+                    // disconnected, hence the null check.
+                    LOGGER.atInfo().log("[" + npcName + "] " + text);
+                    PlayerRef freshPlayerRef = Universe.get().getPlayer(playerUuid);
+                    if (freshPlayerRef == null) {
+                        LOGGER.atInfo().log("Player " + playerUuid + " no longer online, dropping reply from " + npcName);
+                        return;
+                    }
+                    freshPlayerRef.sendMessage(Message.raw("[" + npcName + "] " + text));
+                    // Resynced from the orchestrator's Postgres-backed taming
+                    // truth on EVERY reply, not just when action=="accept_tame" -
+                    // the plugin's own CompanionState is a plain in-memory map
+                    // that resets on every server restart, while Postgres
+                    // doesn't, so a previously-tamed NPC would otherwise never
+                    // follow again after a restart (the model has no reason to
+                    // re-decide ACCEPT_TAME for a player it already considers a
+                    // companion).
+                    if (isCompanion) {
+                        CompanionState.markCompanion(id);
+                    }
+                    if ("open_shop".equals(action)) {
+                        // Only queues the request (thread-safe, no Store access
+                        // here) - see PendingShopOpen's javadoc for why the
+                        // actual PageManager call happens later, on the tick
+                        // thread, in OpenShopIfRequestedAction instead of
+                        // directly here.
+                        PendingShopOpen.request(playerUuid);
+                    } else if ("offer_guide".equals(action)) {
+                        // SeekLandmarkSensor checks this every tick and walks
+                        // toward the target NearbyLandmarks resolves,
+                        // auto-stopping once arrived - see both classes'
+                        // javadoc. No real player free-text is available here
+                        // (this fires from a click, not chat - playerText
+                        // above is a canned string), so there's nothing to
+                        // keyword-match for a water request; always the
+                        // generic nearest-landmark mode.
+                        GuideState.startGuiding(id, GuideState.Target.NEAREST_LANDMARK);
+                    }
+                });
 
         return true;
     }

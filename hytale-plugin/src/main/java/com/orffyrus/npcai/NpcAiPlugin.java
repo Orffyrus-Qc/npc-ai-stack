@@ -2,7 +2,6 @@ package com.orffyrus.npcai;
 
 import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.event.events.player.PlayerChatEvent;
-import com.hypixel.hytale.server.core.event.events.player.PlayerInteractEvent;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.npc.NPCPlugin;
@@ -16,16 +15,17 @@ import java.util.concurrent.ConcurrentHashMap;
  * Entry point. Connects to the npc-ai-stack orchestrator (see the repo root
  * docker-compose.yml) and wires NPC interactions to it.
  *
- * 2026-07-20 finding: PlayerInteractEvent (registered below) never actually
- * fires for NPC clicks in v0.5.7 - confirmed by live play testing, zero
- * dialogue requests ever reached the orchestrator. Real NPC interactions
- * (e.g. the built-in barter shops) run entirely through a JSON-driven
- * Interaction/Action system, not a Java event. The real hook is the
- * "TalkToAI" action type registered below, built by disassembling the
- * shipped "OpenBarterShop" action (NPCShopPlugin/ActionOpenBarterShop) as
- * a working reference - see TalkToAIAction.java. PlayerInteractEvent is
- * left registered in case it's ever useful for non-NPC interactions
- * (blocks, items) - it is NOT the NPC-talk hook.
+ * 2026-07-20 finding: PlayerInteractEvent never actually fires for NPC
+ * clicks in v0.5.7 - confirmed by live play testing, zero dialogue requests
+ * ever reached the orchestrator through it. Real NPC interactions (e.g. the
+ * built-in barter shops) run entirely through a JSON-driven Interaction/
+ * Action system, not a Java event. The real hook is the "TalkToAI" action
+ * type registered below, built by disassembling the shipped "OpenBarterShop"
+ * action (NPCShopPlugin/ActionOpenBarterShop) as a working reference - see
+ * TalkToAIAction.java. The PlayerInteractEvent-based NpcInteractListener
+ * (confirmed dead per the above) was removed in a later cleanup pass - add a
+ * fresh PlayerInteractEvent hook here if a future non-NPC use case (blocks,
+ * items) needs one.
  */
 public class NpcAiPlugin extends JavaPlugin {
 
@@ -44,8 +44,19 @@ public class NpcAiPlugin extends JavaPlugin {
      * PlayerRef UUID. Started by TalkToAIAction on interact; continued or
      * ended by PlayerChatToAIListener. Deliberately just an in-memory map,
      * not persisted - conversations don't need to survive a server restart.
+     *
+     * Staleness used to be checked only lazily, inside PlayerChatToAIListener,
+     * the next time that SAME player happened to chat - a player who talked
+     * to one NPC once and then logged off (or just walked away for good)
+     * left their entry here forever, growing unboundedly with distinct
+     * players over a long server uptime. sweepStaleConversations() below
+     * reaps these on a timer regardless of whether that player ever chats
+     * again.
      */
     static final Map<UUID, Conversation> ACTIVE_CONVERSATIONS = new ConcurrentHashMap<>();
+
+    /** Shared with PlayerChatToAIListener's own lazy per-message check. */
+    static final long CONVERSATION_TIMEOUT_MILLIS = 5 * 60 * 1000L;
 
     record Conversation(String npcId, String npcName, String aiRole, String situation,
                         long lastActivityMillis) {
@@ -65,9 +76,6 @@ public class NpcAiPlugin extends JavaPlugin {
         BRIDGE = new NpcAiBridge(ORCHESTRATOR_URL);
         BRIDGE.connect();
 
-        NpcInteractListener listener = new NpcInteractListener(BRIDGE);
-        this.getEventRegistry().registerGlobal(PlayerInteractEvent.class, listener::onPlayerInteract);
-
         NPCPlugin.get().registerCoreComponentType("TalkToAI", TalkToAIActionBuilder::new);
         LOGGER.atInfo().log("Registered TalkToAI NPC action type");
 
@@ -86,5 +94,15 @@ public class NpcAiPlugin extends JavaPlugin {
         PlayerChatToAIListener chatListener = new PlayerChatToAIListener(BRIDGE);
         this.getEventRegistry().registerAsyncGlobal(PlayerChatEvent.class, chatListener::onChat);
         LOGGER.atInfo().log("Registered PlayerChatEvent -> AI conversation listener");
+
+        new java.util.Timer(true).scheduleAtFixedRate(new java.util.TimerTask() {
+            public void run() { sweepStaleConversations(); }
+        }, CONVERSATION_TIMEOUT_MILLIS, CONVERSATION_TIMEOUT_MILLIS);
+    }
+
+    private static void sweepStaleConversations() {
+        long now = System.currentTimeMillis();
+        ACTIVE_CONVERSATIONS.entrySet().removeIf(
+                e -> now - e.getValue().lastActivityMillis() > CONVERSATION_TIMEOUT_MILLIS);
     }
 }

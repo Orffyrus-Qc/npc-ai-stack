@@ -9,6 +9,10 @@ on:
       - "sandbox/**"
 
 jobs:
+  # Runs skill_harness.py bare (no container isolation) against fixed,
+  # reviewed fixture files checked into sandbox/examples/ - safe because
+  # these go through the same PR review as any other source file, unlike
+  # validate-candidates below which handles arbitrary LLM-generated code.
   harness-self-test:
     runs-on: ubuntu-latest
     steps:
@@ -32,9 +36,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
 
       - name: Validate any queued candidate skills
         run: |
@@ -46,7 +47,31 @@ jobs:
           fi
           status=0
           for skill in "${candidates[@]}"; do
-            echo "=== validating $skill ==="
-            python sandbox/skill_harness.py "$skill" || status=1
+            name="$(basename "$skill")"
+            echo "=== validating $name ==="
+            # sandbox/candidates/ holds arbitrary LLM-generated code (see
+            # skill_writer.py) - this used to invoke skill_harness.py bare
+            # on the runner (full network access, no resource limits), so a
+            # PR that merely added a file here could execute arbitrary code
+            # with the runner's full privileges the moment this workflow
+            # fired, before any human reviewed it. Same lockdown flags as
+            # sandbox/run_skill_validation.sh, which is the thing that
+            # actually promotes a skill to approved/ - this CI job only
+            # gates, it never touches approved/ itself.
+            docker run --rm \
+              --network none \
+              --read-only \
+              --tmpfs /tmp:size=16m \
+              --memory 256m \
+              --memory-swap 256m \
+              --pids-limit 32 \
+              --cpus 0.5 \
+              --cap-drop ALL \
+              --security-opt no-new-privileges \
+              --user 65534:65534 \
+              -v "$(realpath "$skill")":/skill/candidate.py:ro \
+              -v "$(realpath sandbox/skill_harness.py)":/skill/harness.py:ro \
+              python:3.12-slim \
+              timeout 20 python /skill/harness.py /skill/candidate.py || status=1
           done
           exit $status

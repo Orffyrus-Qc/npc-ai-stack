@@ -9,8 +9,12 @@ Plugin -> orchestrator:
    "situation": "..."}
   {"type": "ambient",   "req_id": "...", "npc_id": "...", "npc_name": "...",
    "npc_role": "...", "situation": "smithing at the forge"}
-  {"type": "outcome",   "npc_id": "...", "player_id": "...",
+  {"type": "outcome",   "npc_id": "...", "npc_role": "...", "player_id": "...",
    "outcome": "player_was_kind"}          # fire-and-forget
+  # "npc_role" is required here (not optional like it might look) - see
+  # handle_outcome()'s comment: an outcome that's the first-ever event
+  # recorded for an npc_id must still resolve the correct DEFAULT_BASELINES
+  # entry, or that NPC's personality baseline gets stuck wrong forever.
   # "player_id" is the player's UUID (stable identity for memory/personality
   # keying); "player_name" is their real in-game username, used only so the
   # NPC can address them by name - never used as a lookup key, since names
@@ -48,14 +52,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import random
 import time
+from pathlib import Path
 
 import websockets
 
 from llm_client import DialogueResult, LlamaClient, NPCContext, Personality
 from memory import EpisodicEntry, MemoryStore, compress_npc_memory
 from personality import PersonalityStore
-from priority_queue import NPCRequestDispatcher
+from priority_queue import BUSY_LINES, NPCRequestDispatcher
+from skill_runtime import SkillRuntime
 from taming import TamingStore
 
 logging.basicConfig(level=logging.INFO)
@@ -92,6 +100,7 @@ LLM = LlamaClient()
 MEMORY = MemoryStore()
 PERSONALITY = PersonalityStore()
 TAMING = TamingStore()
+SKILLS = SkillRuntime(Path(os.environ.get("SANDBOX_DIR", "/sandbox")))
 
 # Per-role defaults; move to config/DB as your cast grows.
 DEFAULT_BASELINES: dict[str, Personality] = {
@@ -205,6 +214,35 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
 
 async def handle_ambient(msg: dict) -> str:
     ctx = await _build_context(msg)
+
+    # If this NPC has an approved skill (sandbox/approved/ - see
+    # skill_runtime.py), let it decide first: zero GPU cost, and an NPC
+    # with a learned skill is meant to actually use it rather than always
+    # falling back to improvised LLM flavor text. Only "say"/"idle" have
+    # anywhere to go on the plugin side today - see skill_runtime.py's
+    # docstring for why other action types are logged, not dropped
+    # silently, but don't produce a line yet.
+    skill_state = {
+        "event": "idle_tick",
+        "player_id": None,
+        # Not tracked anywhere in the wire protocol/orchestrator yet - an
+        # honest gap, not a real value pretending to be one. A skill
+        # relying on npc_hp actually varying won't behave usefully until
+        # this is real.
+        "npc_hp": 100,
+        "time_of_day": msg.get("situation", ""),
+        "nearby_players": 1,
+    }
+    skill_out = await SKILLS.try_decide(ctx.npc_id, skill_state)
+    if skill_out is not None:
+        action = skill_out.get("action")
+        if action == "say":
+            return skill_out.get("text", "")
+        if action != "idle":
+            logger.info("npc %s approved skill chose action=%s - not wired into "
+                        "the plugin yet, no ambient line this tick", ctx.npc_id, action)
+        return ""
+
     return await DISPATCHER.request_ambient(
         ctx.npc_id, lambda: LLM.ambient_line(ctx, msg.get("situation", "the day"))
     )
@@ -219,7 +257,16 @@ async def handle_outcome(msg: dict) -> None:
         logger.warning("dropping outcome with no player_id: npc=%s outcome=%s",
                         msg.get("npc_id"), msg.get("outcome"))
         return
-    baseline = DEFAULT_BASELINES.get(msg.get("npc_role", ""), FALLBACK_BASELINE)
+    npc_role = msg.get("npc_role", "")
+    if not npc_role:
+        # Only actually matters the first time this npc_id is ever seen
+        # (load() creates the personality row with whatever baseline is
+        # passed here, and nothing ever corrects it later) - but there's no
+        # way to tell from here whether this is that first time, so warn
+        # every time rather than silently risking a wrong-forever baseline.
+        logger.warning("outcome missing npc_role, baseline may default wrong: npc=%s outcome=%s",
+                        msg.get("npc_id"), msg.get("outcome"))
+    baseline = DEFAULT_BASELINES.get(npc_role, FALLBACK_BASELINE)
     await PERSONALITY.record_outcome(
         msg["npc_id"], player_id, msg["outcome"], baseline
     )
@@ -238,7 +285,21 @@ async def plugin_connection(ws) -> None:
         try:
             is_companion = False
             if mtype == "dialogue":
-                text, action, is_companion = await handle_dialogue(msg)
+                try:
+                    text, action, is_companion = await handle_dialogue(msg)
+                except Exception:
+                    # handle_dialogue does its own real work (taming,
+                    # personality, memory) beyond just the LLM call, which
+                    # DISPATCHER.request_dialogue already guards with a
+                    # timeout+fallback - a bug anywhere in that surrounding
+                    # logic used to propagate all the way out here and skip
+                    # the "say" send entirely, leaving the player with total
+                    # silence instead of even a busy-fallback line. Never
+                    # let an unexpected server-side bug be worse for the
+                    # player than the GPU just being busy.
+                    logger.exception("handle_dialogue failed unexpectedly npc=%s",
+                                      msg.get("npc_id"))
+                    text, action = random.choice(BUSY_LINES), "none"
             elif mtype == "ambient":
                 text, action = await handle_ambient(msg), "none"
             elif mtype == "outcome":
@@ -279,10 +340,18 @@ async def compression_daemon() -> None:
     busy, request_ambient returns '' and we just retry the NPC next cycle.
     """
     async def low_prio_llm(prompt: str) -> str:
+        # Plain completion, NOT LLM.dialogue() - dialogue() wraps every call
+        # in the full NPC-roleplay SYSTEM_TEMPLATE (personality, ACTION-tag
+        # rules, etc.), which is irrelevant here and was pushing this request
+        # past the 2048-token slot budget on its own for any NPC with a
+        # non-trivial batch of notes to summarize - causing llama.cpp to
+        # 400 every single sweep, forever, silently mislogged by the
+        # `if not result: raise RuntimeError("gpu busy, ...")` below as GPU
+        # contention. Confirmed live: compression had never once succeeded
+        # for any NPC as a result (0 rows in semantic_facts).
         async def call() -> str:
-            ctx = NPCContext(npc_id="_system", name="system", role="archivist",
-                             personality=Personality())
-            return (await LLM.dialogue(ctx, prompt)).text
+            return await LLM.complete([{"role": "user", "content": prompt}],
+                                       max_tokens=200)
         result = await DISPATCHER.request_ambient("_compression", call)
         if not result:
             raise RuntimeError("gpu busy, retry later")

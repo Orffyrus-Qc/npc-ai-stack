@@ -39,6 +39,12 @@ EMBED_DIM = 384
 
 COMPRESS_THRESHOLD = 60   # episodic entries per NPC before compression kicks in
 COMPRESS_BATCH = 30       # oldest N entries summarized + deleted per pass
+# Hard cap on the joined notes text handed to the LLM, regardless of
+# COMPRESS_BATCH - a batch of unusually long entries could still overflow
+# the model's context on its own (see main.py's low_prio_llm fix for the
+# other half of this: it used to wrap this prompt in a ~700-token roleplay
+# system prompt too, which made this worse but was never the only risk).
+MAX_COMPRESSION_CHARS = 6000
 
 
 @dataclass
@@ -208,6 +214,20 @@ async def compress_npc_memory(store: MemoryStore, llm_call, npc_id: str) -> int:
     ids, texts = await store.oldest_batch(npc_id)
     if not ids:
         return 0
+    # Keep only as many of the oldest entries as fit MAX_COMPRESSION_CHARS
+    # (always at least one, so a single oversized entry still makes
+    # progress instead of stalling compression for this NPC forever). Any
+    # dropped entries stay in Qdrant uncompressed and get picked up on a
+    # later sweep - ids/texts must stay in lockstep since only ids that are
+    # actually summarized below get deleted.
+    kept_ids, kept_texts, total_chars = [], [], 0
+    for eid, text in zip(ids, texts):
+        if kept_texts and total_chars + len(text) > MAX_COMPRESSION_CHARS:
+            break
+        kept_ids.append(eid)
+        kept_texts.append(text)
+        total_chars += len(text)
+    ids, texts = kept_ids, kept_texts
     prompt = COMPRESSION_PROMPT.format(n=len(texts), notes="\n".join(f"- {t}" for t in texts))
     try:
         import json

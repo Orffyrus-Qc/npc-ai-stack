@@ -23,7 +23,11 @@ from llm_client import Personality
 
 PG_DSN = "postgresql://npc:npc@fact-db:5432/npc"
 
-LEARNING_RATE = 0.03          # max nudge per interaction event
+LEARNING_RATE = 0.03          # base nudge per interaction event - actual size is
+                               # LEARNING_RATE * direction, and OUTCOME_EFFECTS below
+                               # deliberately uses |direction| > 1 for outcomes meant
+                               # to matter more (e.g. player_attacked_npc's -3/+2 is a
+                               # 0.09/0.06 nudge, not 0.03) - this is NOT a per-event cap
 DECAY_PER_DAY = 0.01          # drift toward baseline per real-time day
 TRAIT_FLOOR = 0.05
 TRAIT_CEIL = 0.95

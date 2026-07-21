@@ -21,12 +21,28 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class PendingShopOpen {
 
-    private static final ConcurrentHashMap<UUID, Boolean> REQUESTED = new ConcurrentHashMap<>();
+    /** Give up on a never-consumed request after this long. A player who
+     * triggers OPEN_SHOP and then disconnects (or simply never wanders back
+     * near the NPC that offered) used to leave a permanent entry here -
+     * unbounded growth with distinct players over a long server uptime,
+     * since only consumeIfRequested() ever removed anything. */
+    private static final long REQUEST_TTL_MILLIS = 5 * 60 * 1000L;
+
+    private static final ConcurrentHashMap<UUID, Long> REQUESTED = new ConcurrentHashMap<>();
+
+    static {
+        new java.util.Timer(true).scheduleAtFixedRate(new java.util.TimerTask() {
+            public void run() {
+                long now = System.currentTimeMillis();
+                REQUESTED.entrySet().removeIf(e -> now - e.getValue() > REQUEST_TTL_MILLIS);
+            }
+        }, REQUEST_TTL_MILLIS, REQUEST_TTL_MILLIS);
+    }
 
     private PendingShopOpen() { }
 
     public static void request(UUID playerUuid) {
-        REQUESTED.put(playerUuid, Boolean.TRUE);
+        REQUESTED.put(playerUuid, System.currentTimeMillis());
     }
 
     /** Get-and-clear: returns true at most once per request(). */
