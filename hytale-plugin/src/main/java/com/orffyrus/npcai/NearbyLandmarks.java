@@ -45,6 +45,14 @@ public final class NearbyLandmarks {
 
     /** Blocks to search outward before giving up on a given zone type. */
     private static final int SEARCH_RADIUS = 400;
+    /** Water (Ocean/Shallow_Ocean/Shore) search radius - much larger than
+     * SEARCH_RADIUS because coastline is far sparser than biome-region
+     * zones. Live testing showed 400 blocks reliably found nothing at all
+     * ("couldn't find a NEAREST_WATER... giving up" on every single guide
+     * request) for a player well inland - confirmed the search itself
+     * worked correctly (see the seed/x/z fix), it just never had a chance
+     * to reach real coastline at that radius. */
+    private static final int WATER_SEARCH_RADIUS = 3000;
     /** Cap on distinct discoverable zone types we bother searching for per NPC. */
     private static final int MAX_ZONE_TYPES = 6;
     /** Cap on landmarks actually mentioned once found. */
@@ -141,7 +149,7 @@ public final class NearbyLandmarks {
             if (!zoneName.contains("Ocean") && !zoneName.contains("Shore")) {
                 continue;
             }
-            Vector3i hit = SpiralSearchUtil.search(cg, seed, x, z, SEARCH_RADIUS,
+            Vector3i hit = SpiralSearchUtil.search(cg, seed, x, z, WATER_SEARCH_RADIUS,
                     zbr -> {
                         ZoneGeneratorResult zr = zbr.getZoneResult();
                         return zr != null && zr.getZone() != null && zoneName.equals(zr.getZone().name());

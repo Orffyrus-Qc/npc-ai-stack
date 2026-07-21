@@ -241,6 +241,23 @@
               }
             },
             {
+              "$Comment": "Keep following even while starting a conversation - $Interaction only lasts ~1s before the Timeout below returns to Watching, but without this an established companion visibly freezes for that second every time the player clicks to talk. Continue:true is required here so the Timeout node below still runs every tick regardless of whether this one matches - without it, a nearby companion would get stuck in $Interaction forever.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  { "Type": "Player", "Range": 30 }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 0.9,
+                "StopDistance": 3,
+                "RelaxedMoveConstraints": false
+              }
+            },
+            {
               "$Comment": "Return to Watching after interaction ends",
               "Sensor": {
                 "Type": "Any"
