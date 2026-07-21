@@ -77,6 +77,9 @@ public class NpcAiPlugin extends JavaPlugin {
         NPCPlugin.get().registerCoreComponentType("OpenShopIfRequested", OpenShopIfRequestedActionBuilder::new);
         LOGGER.atInfo().log("Registered OpenShopIfRequested NPC action type");
 
+        NPCPlugin.get().registerCoreComponentType("IsCompanion", IsCompanionSensorBuilder::new);
+        LOGGER.atInfo().log("Registered IsCompanion NPC sensor type");
+
         PlayerChatToAIListener chatListener = new PlayerChatToAIListener(BRIDGE);
         this.getEventRegistry().registerAsyncGlobal(PlayerChatEvent.class, chatListener::onChat);
         LOGGER.atInfo().log("Registered PlayerChatEvent -> AI conversation listener");

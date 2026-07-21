@@ -1,5 +1,47 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-21: companions can actually move now - real Seek/follow behavior
+
+Requested: a tamed NPC that agrees to follow the player should actually
+be able to move, not just stand there having agreed to it.
+
+**Found a much simpler real mechanism than the raw pathfinding API
+flagged as the big remaining lift in every earlier session.** Rather than
+wire up `AStarWithTarget`/`PathFollower` directly (real, but low-level,
+multi-tick plumbing), found that Hytale's own tamed-animal system
+(`Server/NPC/Roles/Creature/Livestock/Tamed/*.json`, e.g. `Tamed_Cow.json`)
+already solves "move toward/stay near a target" with two declarative,
+JSON-authorable `BodyMotion` types: `"Seek"` (walk toward whatever the
+paired `Sensor` currently targets) and `"MaintainDistance"` (stay within
+a distance range) - confirmed via `Template_Livestock.json`, the real
+template those tamed-animal roles reference. No custom pathfinding code
+needed at all.
+
+**New `IsCompanion` sensor** (registered the same way as the custom
+Actions - `registerCoreComponentType` is generic over both Sensors and
+Actions), paired with the built-in `"Player"` sensor via a real `"And"`
+composite (confirmed shape from a real shipped Goblin panic-behavior
+JSON). Once `CompanionState.markCompanion(npcId)` is set - flipped the
+moment `action="accept_tame"` arrives, already server-enforced by then,
+same as the shop gating - the Watching state's fallback `BodyMotion:
+Nothing` is replaced by `BodyMotion: Seek` toward the nearest player.
+
+**Known v1 simplification, documented rather than silently assumed**:
+this follows the *nearest* player, not specifically its own owner -
+`CompanionState` only tracks "is this NPC a companion at all", the same
+simplification already used for shop-gating (`is_tamed_by_anyone`).
+Correct for solo/small-group testing (everything in this project has
+been tested that way); a populated multiplayer world with several
+players or several simultaneous companions would need real owner-
+specific entity filtering to behave correctly - noted directly in
+`CompanionState.java`'s javadoc as the thing to build if that need ever
+comes up.
+
+Boot-tested clean across all four roles (the new sensor/motion
+combination validates with no errors or warnings) - **not yet confirmed
+live with an actual companion visibly walking behind a connected
+player**, since that needs a real client to watch.
+
 ## 2026-07-21: shop-open bug found live - $Interaction is too short-lived
 
 Live testing of the just-shipped shop feature found a real bug: the

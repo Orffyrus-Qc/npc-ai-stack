@@ -105,6 +105,12 @@ public class TalkToAIAction extends ActionBase {
                 // call happens later, on the tick thread, in
                 // OpenShopIfRequestedAction instead of directly here.
                 PendingShopOpen.request(playerUuid);
+            } else if ("accept_tame".equals(action)) {
+                // The orchestrator has already enforced the 1-tamed-NPC-
+                // per-player rule server-side by the time this arrives - no
+                // further validation needed here, just flip the flag
+                // IsCompanionSensor checks every tick.
+                CompanionState.markCompanion(npcId);
             }
         });
 

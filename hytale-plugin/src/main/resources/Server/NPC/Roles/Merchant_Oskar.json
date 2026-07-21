@@ -141,6 +141,22 @@
               ]
             },
             {
+              "$Comment": "Companion mode: once tamed, seek toward the nearest player instead of standing still. The Seek/MaintainDistance BodyMotion types are real, shipped engine functionality (confirmed via disassembly and via the real Template_Livestock.json's own tamed-animal follow behavior), not custom pathfinding code. v1 simplification: follows the nearest player, not specifically its owner - correct for solo/small-group testing, would need real owner-specific entity filtering for a populated multiplayer world (see CompanionState.java's javadoc)",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  { "Type": "Player", "Range": 30 }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 0.8,
+                "StopDistance": 3,
+                "RelaxedMoveConstraints": false
+              }
+            },
+            {
               "Sensor": {
                 "Type": "Any"
               },

@@ -90,6 +90,8 @@ public class PlayerChatToAIListener {
             freshSender.sendMessage(Message.raw("[" + npcName + "] " + text));
             if ("open_shop".equals(action)) {
                 PendingShopOpen.request(playerUuid);
+            } else if ("accept_tame".equals(action)) {
+                CompanionState.markCompanion(conversation.npcId());
             }
         });
         // ThreatMemory is live (a threat can appear/disappear mid-conversation)
