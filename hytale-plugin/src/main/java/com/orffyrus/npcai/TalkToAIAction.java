@@ -76,7 +76,10 @@ public class TalkToAIAction extends ActionBase {
         // Computed once here (Ref/Store are only available in this ECS
         // callback, not in PlayerChatToAIListener's async chat handling) and
         // cached on the Conversation so every later chat turn reuses it
-        // rather than needing NPC entity access at all.
+        // rather than needing NPC entity access at all. Landmarks are static
+        // (world geography never changes for a stationary NPC), so this is
+        // safe to cache forever - unlike ThreatMemory below, which is live
+        // and re-checked on every single turn, not cached on the Conversation.
         String situation = NearbyLandmarks.describe(npcId, ref, store);
 
         NpcAiPlugin.ACTIVE_CONVERSATIONS.put(
@@ -98,6 +101,9 @@ public class TalkToAIAction extends ActionBase {
             freshPlayerRef.sendMessage(Message.raw("[" + npcName + "] " + text));
         });
 
+        String threat = ThreatMemory.describe(npcId);
+        String fullSituation = threat.isEmpty() ? situation : situation + " " + threat;
+
         bridge.sendDialogue(
                 npcId,
                 npcName,
@@ -105,7 +111,7 @@ public class TalkToAIAction extends ActionBase {
                 playerUuid.toString(),
                 playerRef.getUsername(),
                 "(the player approaches and interacts with you)",
-                situation);
+                fullSituation);
 
         return true;
     }

@@ -71,6 +71,9 @@ public class NpcAiPlugin extends JavaPlugin {
         NPCPlugin.get().registerCoreComponentType("TalkToAI", TalkToAIActionBuilder::new);
         LOGGER.atInfo().log("Registered TalkToAI NPC action type");
 
+        NPCPlugin.get().registerCoreComponentType("NoteNearbyThreat", NoteNearbyThreatActionBuilder::new);
+        LOGGER.atInfo().log("Registered NoteNearbyThreat NPC action type");
+
         PlayerChatToAIListener chatListener = new PlayerChatToAIListener(BRIDGE);
         this.getEventRegistry().registerAsyncGlobal(PlayerChatEvent.class, chatListener::onChat);
         LOGGER.atInfo().log("Registered PlayerChatEvent -> AI conversation listener");

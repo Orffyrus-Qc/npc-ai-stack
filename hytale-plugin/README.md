@@ -1,6 +1,70 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
-## 🎉 2026-07-21: real name recognition + per-player memory - confirmed live, plus a real bug fixed
+## 2026-07-21: Adventurer archetype - real hostile detection, NPC-decided guide vs. fight
+
+Requested: NPCs distributed across the world as traders or adventurers,
+where adventurers are easier to befriend/tame and can either lead the
+player to a nearby enemy or actually join the fight - the NPC's own
+choice, not a fixed rule.
+
+**Spawn distribution needs no new engineering.** NPCs spawn wherever the
+player is standing when they run `/npc spawn <role>` - there's no way to
+bake a fixed world position into a role JSON. "Trader here, adventurer
+there" already works today: walk to different spots and spawn different
+roles.
+
+**Real hostile detection, confirmed via real shipped asset data, not a
+guess.** New `Adventurer.json` role adds a `"Mob"` sensor with an
+`"Attitude"`/`"Hostile"` prioritiser to its Watching state - the *exact*
+JSON shape used by the real, shipped Trork combat AI
+(`Component_Trork_Instruction_Panic.json`/`_Search.json` in the game's
+own `Assets.zip`), not an invented API. A new `NoteNearbyThreat` action
+reads the matched entity's live position via
+`InfoProvider.getPositionProvider()` (confirmed via disassembly to expose
+`getX/Y/Z()` alongside `getTarget()`) and records it in a new
+`ThreatMemory.java` - a per-NPC cache with a 20-second staleness window,
+since (unlike world geography) a hostile creature moves and can wander
+off. This is read fresh on every conversation turn (unlike the static
+`NearbyLandmarks` info, which is cached once per NPC forever) so a threat
+that's left doesn't linger in the AI's awareness.
+
+**Extended the NPC's decision vocabulary**: alongside the existing
+`OFFER_GUIDE`/`DECLINE_GUIDE`/`ACCEPT_TAME`, added `OFFER_FIGHT` - the NPC
+now genuinely chooses between leading the player to a threat (guide
+only), actually fighting alongside them, or refusing entirely, weighing
+its own aggression/courage and trust in the player. Added a new
+`adventurer` personality baseline (bolder, higher starting trust -
+"easier to convince to become a companion").
+
+**A real personality-differentiation bug found and fixed by testing it
+live**: the first test had both a bold adventurer *and* an untrusted, low
+-aggression merchant choose `OFFER_FIGHT` for the identical prompt - the
+personality trait wasn't actually steering the decision. Root cause: the
+aggression trait's text description (`"avoids conflict"` for low values)
+described social conflict-avoidance, not combat unwillingness, so the
+model didn't connect it to "wouldn't fight a monster." Fixed by rewording
+the trait descriptions to be explicitly combat-relevant (`"avoids danger
+and physical confrontation, would rather not fight"`) and adding an
+explicit rule connecting low aggression/trust to `OFFER_GUIDE`/
+`DECLINE_GUIDE` rather than `OFFER_FIGHT`. Re-tested live: the same
+prompt now gets a genuinely heroic `OFFER_FIGHT` from the adventurer
+(*"Of course! We're in this together. Let's take it on!"*) and an
+in-character decline from the merchant (*"I appreciate the offer, but
+I'm not much for fighting."*).
+
+**What's still deferred, same as before**: the plugin doesn't act on
+`OFFER_FIGHT`/`OFFER_GUIDE` yet - no actual pathfinding-to-target or
+combat AI has been wired up. This adds the *decision* layer (and the real
+hostile-detection data feeding it) on top of what was already deferred;
+the movement/combat *execution* engineering is unchanged in scope from
+before. Also not yet live-tested with a real player and a real hostile
+mob nearby (only simulated via direct wire-protocol messages, since that
+part can't be exercised without a connected client standing near an
+actual monster) - the hostile-detection sensor itself is boot-tested
+(loads/validates with no errors) but not yet confirmed to fire against a
+real creature in a real world.
+
+## 2026-07-21: real name recognition + per-player memory - confirmed live, plus a real bug fixed
 
 Requested: NPCs that recognize the player (can call them by name) and
 actually use memory of past conversations (recall specific things, not

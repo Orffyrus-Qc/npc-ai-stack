@@ -20,12 +20,17 @@ Orchestrator -> plugin:
   {"type": "say", "req_id": "...", "npc_id": "...", "text": "...", "action": "..."}
   # empty text on ambient = skip this tick (GPU busy) - plugin just no-ops
   # "action" is one of llm_client.VALID_ACTIONS ("none", "offer_guide",
-  # "decline_guide", "accept_tame") - the NPC's own in-character decision
-  # about what to do next (see llm_client.SYSTEM_TEMPLATE's ACTION tag).
-  # "accept_tame" has already been enforced against the 1-tamed-NPC-per-
-  # player rule (see taming.py) by the time this is sent. "offer_guide"/
-  # "decline_guide" are informational only for now - the plugin doesn't
-  # act on them yet (no guiding/movement implementation exists yet).
+  # "offer_fight", "decline_guide", "accept_tame") - the NPC's own
+  # in-character decision about what to do next (see
+  # llm_client.SYSTEM_TEMPLATE's ACTION tag). "accept_tame" has already
+  # been enforced against the 1-tamed-NPC-per-player rule (see taming.py)
+  # by the time this is sent. "offer_guide"/"offer_fight"/"decline_guide"
+  # are informational only for now - the plugin doesn't act on them yet
+  # (no guiding/movement or combat implementation exists yet). The
+  # "situation" field the plugin sends in may include a live-detected
+  # nearby-threat note (see hytale-plugin's ThreatMemory.java) alongside
+  # static location info, which is what these three actions typically
+  # react to.
 
 The plugin should treat every call as async: send the event, keep ticking,
 apply the "say" whenever it arrives. A 200ms-2s delay reads as the NPC
@@ -88,6 +93,11 @@ DEFAULT_BASELINES: dict[str, Personality] = {
     "innkeeper":  Personality(warmth=0.8, aggression=0.1, humor=0.7, curiosity=0.6),
     "elder":      Personality(warmth=0.6, aggression=0.05, humor=0.2, curiosity=0.5),
     "merchant":   Personality(warmth=0.55, aggression=0.15, humor=0.5, curiosity=0.45),
+    # Bold and quick to trust ("easier to convince to become a companion") -
+    # higher starting trust_of_player than the 0.5 default, plus enough
+    # aggression to be plausibly willing to actually fight (not just guide).
+    "adventurer": Personality(warmth=0.65, aggression=0.5, humor=0.55,
+                               curiosity=0.7, trust_of_player=0.6),
 }
 FALLBACK_BASELINE = Personality()
 

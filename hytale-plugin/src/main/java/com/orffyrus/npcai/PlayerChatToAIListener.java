@@ -89,6 +89,16 @@ public class PlayerChatToAIListener {
             }
             freshSender.sendMessage(Message.raw("[" + npcName + "] " + text));
         });
+        // ThreatMemory is live (a threat can appear/disappear mid-conversation)
+        // and re-checked fresh on every turn - only conversation.situation()
+        // (static world geography) is safe to have cached once at conversation
+        // start. No NPC entity access needed here: ThreatMemory is a plain
+        // static cache keyed by npcId, kept updated by the NPC's own ongoing
+        // tick-based Sensor regardless of who's asking.
+        String threat = ThreatMemory.describe(conversation.npcId());
+        String situation = conversation.situation();
+        String fullSituation = threat.isEmpty() ? situation : situation + " " + threat;
+
         bridge.sendDialogue(
                 conversation.npcId(),
                 npcName,
@@ -96,7 +106,7 @@ public class PlayerChatToAIListener {
                 playerUuid.toString(),
                 sender.getUsername(),
                 content,
-                conversation.situation());
+                fullSituation);
 
         return event;
     }

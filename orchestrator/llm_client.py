@@ -45,7 +45,10 @@ class Personality:
 
         return "; ".join([
             level(self.warmth, "cold and curt", "polite but reserved", "warm and welcoming"),
-            level(self.aggression, "avoids conflict", "stands their ground", "quick to anger"),
+            level(self.aggression,
+                  "avoids danger and physical confrontation, would rather not fight",
+                  "willing to stand and fight if it comes to that",
+                  "eager for a fight, itching for a reason to draw a weapon"),
             level(self.humor, "humorless", "occasionally dry-witted", "constantly joking"),
             level(self.curiosity, "uninterested in outsiders", "mildly curious", "full of questions"),
             level(self.trust_of_player, "deeply suspicious of this player",
@@ -69,7 +72,7 @@ class NPCContext:
 # Valid values for the ACTION tag the model appends after its spoken line -
 # see build_dialogue_messages(). Kept as a plain set (not an enum) since the
 # model's raw output has to be validated defensively anyway.
-VALID_ACTIONS = {"none", "offer_guide", "decline_guide", "accept_tame"}
+VALID_ACTIONS = {"none", "offer_guide", "offer_fight", "decline_guide", "accept_tame"}
 
 
 @dataclass
@@ -123,13 +126,25 @@ you truly know this player, which matters more than sounding aloof.
 - Only if a topic is NOT covered anywhere above, be vague or curious in character \
 rather than inventing precise facts you don't have.
 - After your spoken line, on a new line, output exactly one tag deciding what \
-you want to do next: "ACTION: NONE", "ACTION: OFFER_GUIDE", "ACTION: DECLINE_GUIDE", \
-or "ACTION: ACCEPT_TAME". Use OFFER_GUIDE only if the player just asked you to \
-guide/take them somewhere and you're genuinely willing (weigh your temperament and \
-role - a merchant won't wander far from their post); DECLINE_GUIDE if asked but \
-unwilling; ACCEPT_TAME only if the player asked you to become their tamed \
-companion and your trust in them is high enough that you'd truly agree. \
-Otherwise always use NONE."""
+you want to do next: "ACTION: NONE", "ACTION: OFFER_GUIDE", "ACTION: OFFER_FIGHT", \
+"ACTION: DECLINE_GUIDE", or "ACTION: ACCEPT_TAME". These only apply if the player \
+just asked you to lead them somewhere, help against a threat, or become their \
+tamed companion - otherwise always use NONE.
+- If asked to help against a hostile creature (including one mentioned in your \
+current situation below) or to lead the player somewhere: decide for yourself, \
+weighing your own courage/aggression, your trust in this player, and your role \
+(a merchant tied to their post is a very different case from a bold adventurer) \
+whether you'd (a) actually fight alongside them - OFFER_FIGHT, (b) lead them \
+there but leave the fighting to them - OFFER_GUIDE, or (c) refuse entirely - \
+DECLINE_GUIDE. Concretely: if your temperament above says you avoid danger and \
+physical confrontation, OR you don't yet trust this player much, do NOT pick \
+OFFER_FIGHT - use OFFER_GUIDE (if mildly willing to help at all) or DECLINE_GUIDE \
+(if not). Only pick OFFER_FIGHT if you're genuinely someone who stands and \
+fights (or actively seeks a fight) AND you have real trust in this player - \
+being sociable or warm is not the same as being willing to risk your life in \
+combat, don't confuse the two.
+- ACCEPT_TAME only if the player asked you to become their tamed companion and \
+your trust in them is high enough that you'd truly agree."""
 
 
 def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict]:
