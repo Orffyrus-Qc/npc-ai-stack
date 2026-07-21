@@ -18,15 +18,23 @@ import java.net.http.WebSocket;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.BiConsumer;
 
 public class NpcAiBridge implements WebSocket.Listener {
+
+    /** (npcId, text, action) - action is one of the orchestrator's
+     * llm_client.VALID_ACTIONS ("none", "offer_guide", "offer_fight",
+     * "decline_guide", "accept_tame", "open_shop"). No built-in
+     * java.util.function type takes three args, hence this. */
+    @FunctionalInterface
+    public interface SayHandler {
+        void onSay(String npcId, String text, String action);
+    }
 
     private volatile WebSocket ws;
     private final URI uri;
     private final StringBuilder partial = new StringBuilder();
-    /** npcId -> callback(text). Register when an NPC entity spawns. */
-    private final ConcurrentHashMap<String, BiConsumer<String, String>> sayHandlers =
+    /** npcId -> callback. Register when an NPC entity spawns. */
+    private final ConcurrentHashMap<String, SayHandler> sayHandlers =
             new ConcurrentHashMap<>();
 
     public NpcAiBridge(String url) { this.uri = URI.create(url); }
@@ -50,7 +58,7 @@ public class NpcAiBridge implements WebSocket.Listener {
         }, 5000);
     }
 
-    public void registerNpc(String npcId, BiConsumer<String, String> onSay) {
+    public void registerNpc(String npcId, SayHandler onSay) {
         sayHandlers.put(npcId, onSay);
     }
 
@@ -113,12 +121,13 @@ public class NpcAiBridge implements WebSocket.Listener {
         // (already on most plugin classpaths) for anything more complex.
         String npcId = extract(json, "npc_id");
         String text = extract(json, "text");
+        String action = extract(json, "action");
         if (npcId == null) return;
-        BiConsumer<String, String> handler = sayHandlers.get(npcId);
+        SayHandler handler = sayHandlers.get(npcId);
         if (handler != null && text != null && !text.isEmpty()) {
             // IMPORTANT: hop back onto the game/entity thread before touching
             // world state - this callback arrives on the websocket thread.
-            handler.accept(npcId, text);
+            handler.onSay(npcId, text, action != null ? action : "none");
         }
     }
 

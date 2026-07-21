@@ -67,12 +67,15 @@ class NPCContext:
     location_hint: str = ""         # "at the forge, midday"
     is_companion: bool = False      # tamed by the player currently talking (see taming.py)
     player_name: str = ""           # the real player username, not their UUID
+    is_tamed_by_anyone: bool = False  # this NPC has left to be SOMEONE's companion
+                                       # (not necessarily this player's) - distinct from
+                                       # is_companion, and what gates shop access below
 
 
 # Valid values for the ACTION tag the model appends after its spoken line -
 # see build_dialogue_messages(). Kept as a plain set (not an enum) since the
 # model's raw output has to be validated defensively anyway.
-VALID_ACTIONS = {"none", "offer_guide", "offer_fight", "decline_guide", "accept_tame"}
+VALID_ACTIONS = {"none", "offer_guide", "offer_fight", "decline_guide", "accept_tame", "open_shop"}
 
 
 @dataclass
@@ -98,6 +101,18 @@ COMPANION_LINE = (
     "acquaintance. Reference your shared history freely, and feel free to "
     "suggest or agree to plans together (explore somewhere, help with a task, "
     "etc.) in your spoken line.\n"
+)
+
+SHOP_LINE_AVAILABLE = (
+    "\nIf this player asks to see your wares, browse, or buy/sell something, "
+    "and you're still running your stall (see below), that's a normal request - "
+    "react warmly and use the OPEN_SHOP action for it.\n"
+)
+SHOP_LINE_UNAVAILABLE = (
+    "\nYou no longer run a shop or carry trade goods - you left that behind "
+    "when you became someone's companion. If asked to see your wares or trade, "
+    "decline warmly in character (you're not selling anymore); never use "
+    "OPEN_SHOP.\n"
 )
 
 SYSTEM_TEMPLATE = """You are {name}, a {role} in a fantasy world. You are an NPC \
@@ -127,9 +142,9 @@ you truly know this player, which matters more than sounding aloof.
 rather than inventing precise facts you don't have.
 - After your spoken line, on a new line, output exactly one tag deciding what \
 you want to do next: "ACTION: NONE", "ACTION: OFFER_GUIDE", "ACTION: OFFER_FIGHT", \
-"ACTION: DECLINE_GUIDE", or "ACTION: ACCEPT_TAME". These only apply if the player \
-just asked you to lead them somewhere, help against a threat, or become their \
-tamed companion - otherwise always use NONE.
+"ACTION: DECLINE_GUIDE", "ACTION: ACCEPT_TAME", or "ACTION: OPEN_SHOP". These only \
+apply if the player just asked you to lead them somewhere, help against a threat, \
+become their tamed companion, or see your wares/trade - otherwise always use NONE.
 - If asked to help against a hostile creature (including one mentioned in your \
 current situation below) or to lead the player somewhere: decide for yourself, \
 weighing your own courage/aggression, your trust in this player, and your role \
@@ -144,7 +159,8 @@ fights (or actively seeks a fight) AND you have real trust in this player - \
 being sociable or warm is not the same as being willing to risk your life in \
 combat, don't confuse the two.
 - ACCEPT_TAME only if the player asked you to become their tamed companion and \
-your trust in them is high enough that you'd truly agree."""
+your trust in them is high enough that you'd truly agree.
+{shop_line}"""
 
 
 def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict]:
@@ -152,6 +168,7 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
     max_memories = MAX_MEMORIES_COMPANION if ctx.is_companion else MAX_MEMORIES
     facts = "\n".join(f"- {f}" for f in ctx.semantic_facts[:max_facts]) or "- (nothing notable)"
     memories = "\n".join(f"- {m}" for m in ctx.recent_memories[:max_memories]) or "- (first meeting)"
+    shop_line = SHOP_LINE_UNAVAILABLE if ctx.is_tamed_by_anyone else SHOP_LINE_AVAILABLE
     location_line = f"Current situation: {ctx.location_hint}" if ctx.location_hint else ""
     companion_line = COMPANION_LINE if ctx.is_companion else ""
 
@@ -164,6 +181,7 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
         companion_line=companion_line,
         facts=facts,
         memories=memories,
+        shop_line=shop_line,
     )
     return [
         {"role": "system", "content": system},

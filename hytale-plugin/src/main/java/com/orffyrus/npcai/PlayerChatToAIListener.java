@@ -77,7 +77,7 @@ public class PlayerChatToAIListener {
         NpcAiPlugin.ACTIVE_CONVERSATIONS.put(playerUuid, conversation.refreshed());
 
         String npcName = conversation.npcName();
-        bridge.registerNpc(conversation.npcId(), (id, text) -> {
+        bridge.registerNpc(conversation.npcId(), (id, text, action) -> {
             // Same staleness concern as TalkToAIAction: this fires on the
             // WebSocket thread after the real LLM round trip, so re-resolve
             // a fresh PlayerRef from the UUID instead of reusing `sender`.
@@ -88,6 +88,9 @@ public class PlayerChatToAIListener {
                 return;
             }
             freshSender.sendMessage(Message.raw("[" + npcName + "] " + text));
+            if ("open_shop".equals(action)) {
+                PendingShopOpen.request(playerUuid);
+            }
         });
         // ThreatMemory is live (a threat can appear/disappear mid-conversation)
         // and re-checked fresh on every turn - only conversation.situation()

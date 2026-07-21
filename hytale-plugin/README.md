@@ -1,5 +1,49 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 🎉 2026-07-21: real barter shop, gated by taming - confirmed live, all three cases
+
+Requested: the trader's real inventory/shop should open when talking to
+him, up until he decides to become someone's companion (adventurer), at
+which point he no longer trades.
+
+**Real shop UI, not a fake one.** Disassembled the actual, shipped
+`ActionOpenBarterShop.execute()` to find the exact mechanism:
+`player.getPageManager().openCustomPage(ref, store, new
+BarterPage(playerRef, shopId))`. `Merchant_Oskar` now opens the real
+`Klops_Merchant` shop asset (`Server/BarterShops/Klops_Merchant.json` -
+matches his own appearance) - an actually shipped, real inventory, not
+placeholder data.
+
+**A real thread-safety decision, not a guess.** Opening the shop needs a
+`Store<EntityStore>` parameter - unlike `PlayerRef.sendMessage()`, which
+needed none and was already proven safe to call from the async WebSocket
+reply thread. Rather than assume `openCustomPage()` is equally safe
+(guessing wrong here risks corrupting ECS state, a far worse failure than
+a chat message not arriving), the async reply callback only ever touches
+a new `PendingShopOpen.java` - a plain `ConcurrentHashMap` flag. The
+actual `PageManager` call happens later, on the game tick thread, via a
+new `OpenShopIfRequestedAction` ticking inside the `$Interaction` state -
+the same thread every other Action in this plugin already safely runs
+on. This required extending `NpcAiBridge`'s reply-callback signature from
+a 2-arg `BiConsumer<String,String>` to a proper 3-arg `SayHandler`
+(`npcId, text, action`) so the callback can see which action the LLM
+decided, not just its spoken line.
+
+**Gated on taming, confirmed live for all three cases**: added an
+`is_tamed_by_anyone` context flag (distinct from `is_companion`, which is
+per-player - this one means "became ANYONE's companion", since a tamed
+trader stops trading for everyone, not just their new owner) enforced
+both in the system prompt and, defense-in-depth, server-side in
+`main.py` regardless of what the model outputs. Tested live end to end:
+(1) a fresh trader asked about wares correctly says `ACTION: OPEN_SHOP`
+(*"Of course, let me show you what I've got today"*); (2) directly taming
+the same trader in the database (deterministic, rather than waiting on
+the model's own mood to accept an offer) then (3) asking about wares
+again **as a different player entirely** correctly gets `ACTION: NONE`
+and *"I no longer run a shop. My days of trading are behind me"* - the
+shop stays closed for everyone once a trader leaves, not just for
+whoever tamed them.
+
 ## 2026-07-21: Adventurer archetype - real hostile detection, NPC-decided guide vs. fight
 
 Requested: NPCs distributed across the world as traders or adventurers,

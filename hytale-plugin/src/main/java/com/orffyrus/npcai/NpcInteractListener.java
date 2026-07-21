@@ -67,7 +67,7 @@ public class NpcInteractListener {
 
         // Lazily register this NPC's reply handler the first time anyone
         // interacts with it - avoids needing an upfront spawn-time registry.
-        bridge.registerNpc(npcId, (id, text) -> {
+        bridge.registerNpc(npcId, (id, text, action) -> {
             // TODO: this callback fires on the WebSocket thread. Before
             // touching world/entity state (chat bubble, dialogue UI, etc.)
             // you MUST hop back onto whatever thread owns this entity's

@@ -20,17 +20,19 @@ Orchestrator -> plugin:
   {"type": "say", "req_id": "...", "npc_id": "...", "text": "...", "action": "..."}
   # empty text on ambient = skip this tick (GPU busy) - plugin just no-ops
   # "action" is one of llm_client.VALID_ACTIONS ("none", "offer_guide",
-  # "offer_fight", "decline_guide", "accept_tame") - the NPC's own
-  # in-character decision about what to do next (see
+  # "offer_fight", "decline_guide", "accept_tame", "open_shop") - the NPC's
+  # own in-character decision about what to do next (see
   # llm_client.SYSTEM_TEMPLATE's ACTION tag). "accept_tame" has already
-  # been enforced against the 1-tamed-NPC-per-player rule (see taming.py)
-  # by the time this is sent. "offer_guide"/"offer_fight"/"decline_guide"
-  # are informational only for now - the plugin doesn't act on them yet
-  # (no guiding/movement or combat implementation exists yet). The
-  # "situation" field the plugin sends in may include a live-detected
-  # nearby-threat note (see hytale-plugin's ThreatMemory.java) alongside
-  # static location info, which is what these three actions typically
-  # react to.
+  # been enforced against the 1-tamed-NPC-per-player rule (see taming.py),
+  # and "open_shop" against "this NPC already became someone's companion,
+  # they don't run a shop anymore" (also taming.py), by the time this is
+  # sent - the plugin can act on "open_shop" directly with no further
+  # checks needed. "offer_guide"/"offer_fight"/"decline_guide" are
+  # informational only for now - the plugin doesn't act on them yet (no
+  # guiding/movement or combat implementation exists yet). The "situation"
+  # field the plugin sends in may include a live-detected nearby-threat
+  # note (see hytale-plugin's ThreatMemory.java) alongside static location
+  # info, which is what these three actions typically react to.
 
 The plugin should treat every call as async: send the event, keep ticking,
 apply the "say" whenever it arrives. A 200ms-2s delay reads as the NPC
@@ -123,7 +125,8 @@ async def _build_context(msg: dict) -> NPCContext:
             if m not in memories:
                 memories.append(m)
 
-    is_companion = bool(player_id) and await TAMING.get_owner(npc_id) == player_id
+    owner = await TAMING.get_owner(npc_id)
+    is_companion = bool(player_id) and owner == player_id
     return NPCContext(
         npc_id=npc_id,
         name=msg.get("npc_name", npc_id),
@@ -134,6 +137,10 @@ async def _build_context(msg: dict) -> NPCContext:
         location_hint=msg.get("situation", ""),
         is_companion=is_companion,
         player_name=msg.get("player_name", ""),
+        # Whether this NPC has left to be ANYONE's companion, not just this
+        # player's - a tamed trader no longer runs a shop for anyone,
+        # regardless of who tamed them. Gates the OPEN_SHOP action below.
+        is_tamed_by_anyone=owner is not None,
     )
 
 
@@ -161,6 +168,14 @@ async def handle_dialogue(msg: dict) -> tuple[str, str]:
             # mismatch rather than silently pretending the taming worked.
             action = "none"
             text += " (Something holds you back from actually committing to this.)"
+    elif action == "open_shop" and ctx.is_tamed_by_anyone:
+        # Same defense-in-depth as accept_tame above: ctx.is_tamed_by_anyone
+        # was already in the prompt telling the model not to do this, but
+        # enforce the hard rule server-side too rather than trust it always
+        # will. Note the NPC is already gone (not "text += ..." here, since
+        # ctx was already told it has no shop - a stray OPEN_SHOP is a model
+        # slip, not a real request to react to in the reply).
+        action = "none"
 
     # Remember the exchange (fire-and-forget so we don't add latency)
     _spawn(MEMORY.remember_episode(EpisodicEntry(

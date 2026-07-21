@@ -86,7 +86,7 @@ public class TalkToAIAction extends ActionBase {
                 playerUuid,
                 new NpcAiPlugin.Conversation(npcId, npcName, aiRole, situation, System.currentTimeMillis()));
 
-        bridge.registerNpc(npcId, (id, text) -> {
+        bridge.registerNpc(npcId, (id, text, action) -> {
             // Fires on the WebSocket thread, ~1-2s after this method returns
             // (real LLM round trip). The playerRef captured above may be
             // stale by then, so re-resolve a fresh one from the UUID via
@@ -99,6 +99,13 @@ public class TalkToAIAction extends ActionBase {
                 return;
             }
             freshPlayerRef.sendMessage(Message.raw("[" + npcName + "] " + text));
+            if ("open_shop".equals(action)) {
+                // Only queues the request (thread-safe, no Store access here) -
+                // see PendingShopOpen's javadoc for why the actual PageManager
+                // call happens later, on the tick thread, in
+                // OpenShopIfRequestedAction instead of directly here.
+                PendingShopOpen.request(playerUuid);
+            }
         });
 
         String threat = ThreatMemory.describe(npcId);
