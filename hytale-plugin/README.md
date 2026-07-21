@@ -8,7 +8,9 @@ logs: Qdrant memory recall → `llm-inference` chat completion → episodic
 memory write, repeating on every click. **The AI is genuinely generating
 in-character replies from a real in-game interaction.** The reply is now
 also sent back as an actual chat message to the player
-(`PlayerRef.sendMessage(Message.raw(...))`), not just logged.
+(`PlayerRef.sendMessage(Message.raw(...))`), not just logged. (This part
+took one more day and two more real bugs to actually deliver the reply -
+see the 2026-07-21 sections below; that's the version to treat as done.)
 
 Getting here took three real, live-tested fixes, in order:
 1. `PlayerInteractEvent` (the original approach) turned out to never fire
@@ -90,7 +92,34 @@ zero-space JSON. Rebuilt, boots clean, `com.orffyrus:NpcAiStack` still loads
 and enables with no plugin-specific errors - **this is the next thing to
 re-test live**, and this time it should actually work end to end.
 
-## Multi-turn conversation via chat (new, NOT yet live-verified)
+## 🎉 2026-07-21: confirmed working end to end, for real this time
+
+A real player clicked `AI_Talker`, got a real AI reply visibly tagged with
+the NPC's name in chat (`[AI_Talker] ...`), and continuing the conversation
+by just typing in normal chat worked too. Both bugs above (stale
+`PlayerRef`, the JSON whitespace parser bug) are confirmed actually fixed
+live, not just "compiles and boots clean." This is the version to treat as
+the known-good baseline - see the git tag `hytale-plugin-e2e-working` on
+this commit.
+
+Two environment gotchas cost real debugging time getting here and are easy
+to hit again, so they're called out explicitly:
+
+- **The player must be in Adventure mode, not Creative.** Hytale has only
+  two gamemodes - `Adventure` and `Creative` (there is no "Survival";
+  `/gamemode survival` silently fails as an invalid command name and
+  leaves you in whatever mode you were already in). The NPC interact
+  prompt does not appear at all in Creative mode - `/gamemode adventure`
+  before testing.
+- **Every new world defaults to `NpcAiStack` disabled**, per Hytale's
+  per-world mod settings - confirmed via
+  `[PluginManager] Skipping mod com.orffyrus:NpcAiStack (Disabled by
+  server config)` in that world's own server log
+  (`UserData/Saves/<world>/logs/*.log`). This produces a
+  `"failed to find npc role: AI_Talker"` error that looks like a spawn
+  bug but isn't - enable the mod in that world's Mods settings first.
+
+## Multi-turn conversation via chat
 
 Clicking `AI_Talker` now also starts a tracked "conversation" for that
 player (`NpcAiPlugin.ACTIVE_CONVERSATIONS`, keyed by `PlayerRef` UUID).
@@ -105,17 +134,14 @@ you" line used on first click. Replies are prefixed with the NPC's role
 name (`Role.getRoleName()`, e.g. `[AI_Talker] ...`) for visual
 identification. Saying "bye"/"goodbye"/"exit"/"leave"/"stop" ends the
 conversation locally without an LLM call; conversations also expire after
-5 minutes of inactivity.
+5 minutes of inactivity. **Confirmed live 2026-07-21** - see above.
 
 The cancel-suppresses-broadcast contract was confirmed by disassembling
 `GamePacketHandler` (which dispatches `PlayerChatEvent` and checks
 `isCancelled()` before broadcasting to `event.getTargets()`) - but there
 was no existing shipped example of a *listener* for this event to copy
 from (unlike `TalkToAI`, where `ActionOpenBarterShop` was a perfect
-reference). It compiles clean and boots clean
-(`Registered PlayerChatEvent -> AI conversation listener`, no error), but
-**has not yet been exercised by a real player typing in chat** - that's
-the next thing to confirm live.
+reference).
 
 `PlayerInteractEvent` is still registered in `NpcAiPlugin` but is **not**
 the NPC-talk mechanism - kept only in case it's useful for something else.
@@ -129,10 +155,10 @@ the NPC-talk mechanism - kept only in case it's useful for something else.
 | `NPCPlugin.get().registerCoreComponentType("TalkToAI", ...)` | **Confirmed** — action fires for real |
 | Custom asset pack (`AI_Talker.json`) ships, loads, and spawns | **Confirmed live** — `/npc spawn AI_Talker` works in a real world |
 | Clicking `AI_Talker` triggers a real dialogue request | **Confirmed live** — repeated orchestrator round trips (Qdrant recall → LLM call → memory write) on each click |
-| Reply reaches the player as a chat message | **Two real bugs found by live-testing, both fixed, NOT yet re-verified**: (1) stale captured `PlayerRef`, fixed via `Universe.get().getPlayer(uuid)`; (2) the actual blocker - `NpcAiBridge.extract()` required zero-space JSON (`"npc_id":"x"`) but Python's `json.dumps()` emits a space (`"npc_id": "x"`), so the reply callback was never invoked at all. Fixed to tolerate whitespace. |
+| Reply reaches the player as a chat message | **Confirmed live** — two real bugs found and fixed along the way: stale captured `PlayerRef` (fixed via `Universe.get().getPlayer(uuid)`) and `NpcAiBridge.extract()` requiring zero-space JSON when Python's `json.dumps()` emits a space (fixed to tolerate whitespace) |
 | Player lookup in `TalkToAIAction.execute()` | **Confirmed live** — the whole chain depends on it and it works |
-| Thread-hop before `sendMessage()` in the reply callback | Reasoned-not-verified: `PlayerRef.sendMessage()` is used elsewhere from async command handlers in this codebase, so it's likely cross-thread-safe, but this is inference, not a confirmed guarantee. No entity/world-state mutation happens in the callback (kept deliberately narrow because of this). |
-| Multi-turn conversation (`PlayerChatEvent`) | **Still not implemented** |
+| Thread-hop before `sendMessage()` in the reply callback | Reasoned-not-verified: `PlayerRef.sendMessage()` is used elsewhere from async command handlers in this codebase, so it's likely cross-thread-safe, but this is inference, not a confirmed guarantee. No entity/world-state mutation happens in the callback (kept deliberately narrow because of this). Not observed to be an issue across live testing so far. |
+| Multi-turn conversation (`PlayerChatEvent`) | **Confirmed live** — typing after the first click continues the conversation with real text, visually tagged replies |
 
 ## How to actually test this (needs a real client - can't be done from here)
 
@@ -208,20 +234,23 @@ Ctrl+C to stop it; `run/` is gitignored.
 4. ~~Confirm a real click reaches the orchestrator.~~ **Done, live** -
    repeated real dialogue round trips confirmed in the orchestrator's logs.
 5. ~~Wire `PlayerChatEvent` for real multi-turn conversation.~~ **Done,
-   compiles and boots clean** - `PlayerChatToAIListener` + `ACTIVE_CONVERSATIONS`.
-6. ~~Confirm live: does the reply show up as a chat message?~~ **Tested
-   live twice - it didn't, twice.** First: chat interception worked,
-   backend worked, but the reply never reached the player - root-caused to
-   a stale `PlayerRef` captured before the async LLM round trip, fixed by
-   re-resolving via `Universe.get().getPlayer(uuid)`. Second (after that
-   fix, still no reply): the actual blocker - `NpcAiBridge.extract()`'s
-   hand-rolled JSON reader required no space after `:`, but Python's
-   `json.dumps()` always adds one, so the reply callback was never invoked
-   at all. Fixed to tolerate whitespace.
-7. **You are here** - confirm live, a third time: does the reply now
-   actually show up as a chat message with both fixes in place, and does
-   typing after the first click continue the conversation with real text
-   (not just the canned opener)?
+   confirmed live.**
+6. ~~Confirm live: does the reply show up as a chat message?~~ **Done,
+   confirmed live** - two real bugs found and fixed along the way (stale
+   `PlayerRef`, JSON whitespace parsing), see above.
+7. ~~Confirm live: does typing after the first click continue the
+   conversation with real text?~~ **Done, confirmed live 2026-07-21.**
+   Tagged `hytale-plugin-e2e-working` as the known-good baseline.
 8. Confirm the thread-hop question properly (or find a case where it
    actually matters - neither reply callback touches entity/world state
-   today, only sends a chat message).
+   today, only sends a chat message; no issue observed in live testing
+   so far, but this is inference, not a confirmed guarantee).
+9. Sustained/repeat testing: does the conversation survive multiple
+   NPCs at once, a player disconnecting mid-conversation (the
+   `Universe.getPlayer()` null-check path), or the 5-minute conversation
+   timeout actually firing?
+10. `skill_writer.py` against the real GPU/model (only verified so far
+    with a fake LLM/DB) - see the root `CLAUDE.md` "Agreed next steps".
+11. Load-test llama.cpp slots (`--parallel`/ctx tradeoff) with multiple
+    concurrent NPC conversations for real, not just the fake-player test
+    client.

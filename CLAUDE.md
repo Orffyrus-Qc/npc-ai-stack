@@ -83,7 +83,25 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
   fastembed's cache dir, unpinned qdrant-client resolved to a version that
   removed `.search()`, and personality.py's record_outcome() had an
   asyncpg-unparseable unbound placeholder. All fixed; see git log.
-- **2026-07-20, LATEST: confirmed working live, end to end.** A real
+- **2026-07-21, LATEST: fully confirmed working end to end, including
+  multi-turn conversation.** A real player clicks `AI_Talker`, gets a real
+  AI reply visibly tagged with the NPC's name in chat (`[AI_Talker] ...`),
+  and can keep talking by just typing in normal chat - all live-confirmed,
+  not just "compiles and boots clean." Tagged `hytale-plugin-e2e-working`
+  as the known-good baseline. Getting the reply to actually reach the
+  player took two more real bugs found only by watching it fail live: a
+  stale `PlayerRef` captured before the async LLM round trip (fixed by
+  re-resolving via `Universe.get().getPlayer(uuid)` at reply time instead
+  of reusing the original reference), and `NpcAiBridge`'s hand-rolled JSON
+  reader requiring zero-space JSON (`"npc_id":"x"`) when Python's
+  `json.dumps()` always emits a space (`"npc_id": "x"`), which silently
+  dropped every reply before the callback ever ran. Two environment
+  gotchas also cost real debugging time and are now documented prominently
+  in hytale-plugin/README.md: Hytale only has `Adventure`/`Creative`
+  gamemodes (no "Survival" - the NPC interact prompt doesn't appear in
+  Creative), and every new world defaults to `NpcAiStack` disabled in its
+  mod settings. See hytale-plugin/README.md for full detail.
+- **2026-07-20: confirmed working live, end to end (first pass).** A real
   player spawned `AI_Talker`, clicked it, and the orchestrator's own logs
   showed real, repeated round trips (Qdrant recall -> LLM call -> memory
   write) on every click - the AI is genuinely generating replies from a
@@ -94,8 +112,7 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
   ("failed to find npc role"); and a dropped animation-reset instruction
   (diffed against the real Kweebec_Merchant.json to find it) left the NPC
   stuck animating in place. Replies are now sent back as an actual chat
-  message via PlayerRef.sendMessage() - added but not yet confirmed
-  visible in-game (next thing to check). See hytale-plugin/README.md for
+  message via PlayerRef.sendMessage() - see hytale-plugin/README.md for
   the full detail.
 - **2026-07-20, earlier: hytale-plugin/ scaffold added, then compiled and
   booted for real.** User installed Hytale; the real `HytaleServer.jar`
