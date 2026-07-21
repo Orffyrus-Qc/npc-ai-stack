@@ -1,5 +1,57 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 🎉 2026-07-21: real name recognition + per-player memory - confirmed live, plus a real bug fixed
+
+Requested: NPCs that recognize the player (can call them by name) and
+actually use memory of past conversations (recall specific things, not
+just generic acknowledgment). Found and fixed one real, serious bug along
+the way, then confirmed the fix and the new features live against the
+actual model - not just boot-tested.
+
+**Real bug found: episodic memory recall wasn't scoped per player.**
+`MemoryStore.recall_similar()` filtered only by `npc_id`, never
+`player_id` - meaning if two different players talked to the same NPC,
+their conversations could bleed into each other's recalled memories (the
+NPC could "remember" something player B said while talking to player A).
+Fixed to always filter by both. Verified live: had "Alice" tell an NPC a
+made-up secret (a specific lucky number + a collectible), then had "Bob"
+(a different player) ask the NPC about the same topics - confirmed Bob's
+reply showed no knowledge of Alice's specifics, only generic reactions to
+the words themselves.
+
+**Added `recall_recent()`** - chronological (not similarity-based) recall
+of a player's last few exchanges with an NPC, scoped the same way. Needed
+so an NPC can bring up "last time we talked" even when the player's
+current message (a plain "hi") doesn't semantically match the earlier
+topic closely enough for similarity search alone to surface it. Merged
+with `recall_similar()`'s results (recent-first, deduped) in
+`main.py`'s `_build_context()`.
+
+**Added real player name recognition.** The wire protocol now carries
+`player_name` (from `PlayerRef.getUsername()` on the Java side - a real
+in-game username, never used as a lookup key since names can change but
+UUIDs can't) alongside `player_id`. `NPCContext.player_name` feeds the
+system prompt so the NPC can address the player by name once it's spoken
+with them a little.
+
+**Confirmed live, both together**: asked a warm-personality test NPC
+(innkeeper baseline) what it remembered about "Alice" after telling it a
+made-up fact two turns earlier - it replied `"You said your lucky number
+is 743 and you collect blue feathers. How unique!"` and, a turn later,
+addressed her by name unprompted (`"...How are you feeling tonight,
+Alice?"`) - both specific and unprompted, not generic acknowledgment.
+
+**One real nuance worth knowing before you test this on your actual
+NPCs**: the very first test used a deliberately aloof "blacksmith"
+personality baseline, which gave vague, dismissive replies despite the
+memory being correctly retrieved and present in its prompt (confirmed by
+directly inspecting what was sent to the model) - that's in-character
+standoffishness, not a memory bug. A reserved/gruff NPC (closer to
+`Elder_Miri`'s low-warmth baseline than `Merchant_Oskar`'s warmer one)
+may similarly downplay specifics even when it "knows" them - expect the
+warmth trait to visibly affect how forthcoming an NPC is with recalled
+details, not just its tone.
+
 ## 2026-07-21: location awareness + NPC-decided taming (map/movement/taming, part 1)
 
 Requested: NPCs that know the map ("where's the nearest town"), can

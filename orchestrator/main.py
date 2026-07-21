@@ -5,11 +5,16 @@ Wire protocol (JSON, one object per message)
 --------------------------------------------
 Plugin -> orchestrator:
   {"type": "dialogue",  "req_id": "...", "npc_id": "...", "player_id": "...",
-   "npc_name": "...", "npc_role": "...", "text": "...", "situation": "..."}
+   "player_name": "...", "npc_name": "...", "npc_role": "...", "text": "...",
+   "situation": "..."}
   {"type": "ambient",   "req_id": "...", "npc_id": "...", "npc_name": "...",
    "npc_role": "...", "situation": "smithing at the forge"}
   {"type": "outcome",   "npc_id": "...", "player_id": "...",
    "outcome": "player_was_kind"}          # fire-and-forget
+  # "player_id" is the player's UUID (stable identity for memory/personality
+  # keying); "player_name" is their real in-game username, used only so the
+  # NPC can address them by name - never used as a lookup key, since names
+  # can change but the UUID can't.
 
 Orchestrator -> plugin:
   {"type": "say", "req_id": "...", "npc_id": "...", "text": "...", "action": "..."}
@@ -92,10 +97,22 @@ async def _build_context(msg: dict) -> NPCContext:
     baseline = DEFAULT_BASELINES.get(msg.get("npc_role", ""), FALLBACK_BASELINE)
     persona = await PERSONALITY.load(npc_id, player_id, baseline)
     facts = await MEMORY.get_facts(npc_id, player_id or None)
-    memories = (
-        await MEMORY.recall_similar(npc_id, msg.get("text", msg.get("situation", "")))
-        if msg.get("text") or msg.get("situation") else []
-    )
+
+    memories: list[str] = []
+    if player_id and (msg.get("text") or msg.get("situation")):
+        query = msg.get("text", msg.get("situation", ""))
+        # Recent-first (chronological - lets the NPC bring up "last time we
+        # talked" even on a plain "hi" that similarity search wouldn't
+        # match), then similarity-matched memories not already included.
+        # Both scoped to THIS player - see recall_similar/recall_recent's
+        # docstrings for the cross-player bleed bug this fixes.
+        recent = await MEMORY.recall_recent(npc_id, player_id)
+        similar = await MEMORY.recall_similar(npc_id, player_id, query)
+        memories = list(recent)
+        for m in similar:
+            if m not in memories:
+                memories.append(m)
+
     is_companion = bool(player_id) and await TAMING.get_owner(npc_id) == player_id
     return NPCContext(
         npc_id=npc_id,
@@ -106,6 +123,7 @@ async def _build_context(msg: dict) -> NPCContext:
         recent_memories=memories,
         location_hint=msg.get("situation", ""),
         is_companion=is_companion,
+        player_name=msg.get("player_name", ""),
     )
 
 

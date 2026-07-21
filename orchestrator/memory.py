@@ -94,8 +94,15 @@ class MemoryStore:
         )
 
     async def recall_similar(
-        self, npc_id: str, query: str, limit: int = 4
+        self, npc_id: str, player_id: str, query: str, limit: int = 4
     ) -> list[str]:
+        """
+        Topic-relevant recall, scoped to THIS player. Previously filtered only
+        by npc_id - a real bug where two different players talking to the same
+        NPC would have their conversations bleed into each other's recalled
+        memories (NPC could "remember" something player B said and surface it
+        while talking to player A). Always filter by both.
+        """
         # AsyncQdrantClient.search() was removed in favor of query_points()
         # (qdrant-client >= ~1.10) - the response wraps hits in .points.
         result = await self._qdrant.query_points(
@@ -103,10 +110,33 @@ class MemoryStore:
             query=self._embed(query),
             query_filter=Filter(must=[
                 FieldCondition(key="npc_id", match=MatchValue(value=npc_id)),
+                FieldCondition(key="player_id", match=MatchValue(value=player_id)),
             ]),
             limit=limit,
         )
         return [h.payload["text"] for h in result.points]
+
+    async def recall_recent(
+        self, npc_id: str, player_id: str, limit: int = 3
+    ) -> list[str]:
+        """
+        Chronological recall (most recent exchanges), scoped to this player -
+        distinct from recall_similar's topic-similarity search. Needed so an
+        NPC can reference "last time we talked" even when the player's current
+        message (e.g. a plain "hi") doesn't semantically match the earlier
+        topic closely enough for similarity search to surface it.
+        """
+        points, _ = await self._qdrant.scroll(
+            COLLECTION,
+            scroll_filter=Filter(must=[
+                FieldCondition(key="npc_id", match=MatchValue(value=npc_id)),
+                FieldCondition(key="player_id", match=MatchValue(value=player_id)),
+            ]),
+            limit=1024,
+            with_payload=True,
+        )
+        points.sort(key=lambda p: p.payload["ts"], reverse=True)
+        return [p.payload["text"] for p in points[:limit]]
 
     # -- semantic -----------------------------------------------------------
 

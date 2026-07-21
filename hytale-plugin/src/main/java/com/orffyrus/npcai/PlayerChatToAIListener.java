@@ -94,6 +94,7 @@ public class PlayerChatToAIListener {
                 npcName,
                 conversation.aiRole(),
                 playerUuid.toString(),
+                sender.getUsername(),
                 content,
                 conversation.situation());
 

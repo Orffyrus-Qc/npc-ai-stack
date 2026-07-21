@@ -69,13 +69,14 @@ public class NpcAiBridge implements WebSocket.Listener {
     }
 
     public void sendDialogue(String npcId, String npcName, String npcRole,
-                             String playerId, String playerText, String situation) {
+                             String playerId, String playerName,
+                             String playerText, String situation) {
         send(String.format(
             "{\"type\":\"dialogue\",\"req_id\":\"%s\",\"npc_id\":\"%s\"," +
             "\"npc_name\":\"%s\",\"npc_role\":\"%s\",\"player_id\":\"%s\"," +
-            "\"text\":\"%s\",\"situation\":\"%s\"}",
+            "\"player_name\":\"%s\",\"text\":\"%s\",\"situation\":\"%s\"}",
             UUID.randomUUID(), esc(npcId), esc(npcName), esc(npcRole),
-            esc(playerId), esc(playerText), esc(situation)));
+            esc(playerId), esc(playerName), esc(playerText), esc(situation)));
     }
 
     public void sendAmbient(String npcId, String npcName, String npcRole,

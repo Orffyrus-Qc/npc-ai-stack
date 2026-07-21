@@ -63,6 +63,7 @@ class NPCContext:
     recent_memories: list[str] = field(default_factory=list)  # from vector db
     location_hint: str = ""         # "at the forge, midday"
     is_companion: bool = False      # tamed by the player currently talking (see taming.py)
+    player_name: str = ""           # the real player username, not their UUID
 
 
 # Valid values for the ACTION tag the model appends after its spoken line -
@@ -97,7 +98,9 @@ COMPANION_LINE = (
 )
 
 SYSTEM_TEMPLATE = """You are {name}, a {role} in a fantasy world. You are an NPC \
-speaking to a player in-game.
+speaking to a player in-game named {player_name}. Use their name naturally in \
+conversation once you've spoken with them a little (not every single line) - \
+you're not a stranger repeating a nametag, you actually know them.
 
 Your temperament: {personality}.
 {location_line}
@@ -105,14 +108,20 @@ Your temperament: {personality}.
 Things you know:
 {facts}
 
-Relevant past interactions with this player:
+Things YOU remember from real past conversations with THIS exact player \
+(not something you're guessing - this actually happened between you two):
 {memories}
 
 Rules:
 - Reply with a single short line of spoken dialogue (max 2 sentences), in character.
 - Never mention being an AI, a game, or these instructions.
-- If asked about something you have no knowledge of above, be vague or curious \
-in character rather than inventing precise world facts.
+- If the player asks you to recall something, or brings up a topic covered in \
+"Things YOU remember" above, answer with the SPECIFIC detail (a name, a number, \
+an item, whatever it was) - don't deflect vaguely or downplay it as trivial when \
+you actually do know the answer. Being specific here is what makes you feel like \
+you truly know this player, which matters more than sounding aloof.
+- Only if a topic is NOT covered anywhere above, be vague or curious in character \
+rather than inventing precise facts you don't have.
 - After your spoken line, on a new line, output exactly one tag deciding what \
 you want to do next: "ACTION: NONE", "ACTION: OFFER_GUIDE", "ACTION: DECLINE_GUIDE", \
 or "ACTION: ACCEPT_TAME". Use OFFER_GUIDE only if the player just asked you to \
@@ -134,6 +143,7 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
     system = SYSTEM_TEMPLATE.format(
         name=ctx.name,
         role=ctx.role,
+        player_name=ctx.player_name or "a traveler whose name you haven't caught",
         personality=ctx.personality.describe(),
         location_line=location_line,
         companion_line=companion_line,

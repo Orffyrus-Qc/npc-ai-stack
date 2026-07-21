@@ -84,6 +84,10 @@ public class NpcInteractListener {
                 npcTypeId,
                 npcTypeId,
                 playerId,
+                "", // Player (entity) has no username getter found here, unlike
+                    // PlayerRef.getUsername() used elsewhere - moot anyway since
+                    // this listener is confirmed dead (PlayerInteractEvent never
+                    // fires for NPCs), kept only as documented above.
                 "(the player approaches and interacts with you)",
                 "");
     }

@@ -103,6 +103,7 @@ public class TalkToAIAction extends ActionBase {
                 npcName,
                 aiRole,
                 playerUuid.toString(),
+                playerRef.getUsername(),
                 "(the player approaches and interacts with you)",
                 situation);
 
