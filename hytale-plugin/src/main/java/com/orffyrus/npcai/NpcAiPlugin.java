@@ -47,9 +47,10 @@ public class NpcAiPlugin extends JavaPlugin {
      */
     static final Map<UUID, Conversation> ACTIVE_CONVERSATIONS = new ConcurrentHashMap<>();
 
-    record Conversation(String npcId, String npcName, String aiRole, long lastActivityMillis) {
+    record Conversation(String npcId, String npcName, String aiRole, String situation,
+                        long lastActivityMillis) {
         Conversation refreshed() {
-            return new Conversation(npcId, npcName, aiRole, System.currentTimeMillis());
+            return new Conversation(npcId, npcName, aiRole, situation, System.currentTimeMillis());
         }
     }
 

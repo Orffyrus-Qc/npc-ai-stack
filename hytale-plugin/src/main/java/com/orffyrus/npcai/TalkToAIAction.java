@@ -73,10 +73,15 @@ public class TalkToAIAction extends ActionBase {
                 ? configuredDisplayName : npcId;
 
         UUID playerUuid = playerRef.getUuid();
+        // Computed once here (Ref/Store are only available in this ECS
+        // callback, not in PlayerChatToAIListener's async chat handling) and
+        // cached on the Conversation so every later chat turn reuses it
+        // rather than needing NPC entity access at all.
+        String situation = NearbyLandmarks.describe(npcId, ref, store);
 
         NpcAiPlugin.ACTIVE_CONVERSATIONS.put(
                 playerUuid,
-                new NpcAiPlugin.Conversation(npcId, npcName, aiRole, System.currentTimeMillis()));
+                new NpcAiPlugin.Conversation(npcId, npcName, aiRole, situation, System.currentTimeMillis()));
 
         bridge.registerNpc(npcId, (id, text) -> {
             // Fires on the WebSocket thread, ~1-2s after this method returns
@@ -99,7 +104,7 @@ public class TalkToAIAction extends ActionBase {
                 aiRole,
                 playerUuid.toString(),
                 "(the player approaches and interacts with you)",
-                "");
+                situation);
 
         return true;
     }

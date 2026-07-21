@@ -1,0 +1,148 @@
+package com.orffyrus.npcai;
+
+import com.hypixel.hytale.builtin.locate.SpiralSearchUtil;
+import com.hypixel.hytale.component.Ref;
+import com.hypixel.hytale.component.Store;
+import com.hypixel.hytale.logger.HytaleLogger;
+import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
+import com.hypixel.hytale.server.core.universe.world.World;
+import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
+import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
+import com.hypixel.hytale.server.core.universe.world.worldgen.IWorldGen;
+import com.hypixel.hytale.server.worldgen.chunk.ChunkGenerator;
+import com.hypixel.hytale.server.worldgen.zone.Zone;
+import com.hypixel.hytale.server.worldgen.zone.ZoneGeneratorResult;
+import org.joml.Vector3d;
+import org.joml.Vector3i;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Answers "where's the nearest X" using Hytale's own real, shipped
+ * mechanism for it - the same ChunkGenerator.getZonePatternProvider() +
+ * SpiralSearchUtil.search() combo that backs the built-in "/locate zone"
+ * command (confirmed by disassembling HytaleServer.jar v0.5.7). Hytale has
+ * no built-in "town" concept - it's procedural terrain, not authored
+ * settlements - so the closest real equivalent is a named world-gen Zone
+ * (a temple, a unique landmark, a biome region). This describes those, not
+ * a fictional "town" system that doesn't exist in the engine.
+ *
+ * Zone-at-a-coordinate is a pure procedural/noise function backed by an
+ * in-memory cache (ChunkGenerator routes through ChunkGeneratorCache,
+ * confirmed via disassembly) - no chunk loading or disk I/O involved - so
+ * this is safe to call synchronously from the game thread with a bounded
+ * search radius. Results are still cached per NPC (keyed by the stable
+ * role-name identity from TalkToAIAction) since our custom NPCs never
+ * move: the answer for a given NPC's fixed position never changes, so
+ * there's no reason to ever recompute it.
+ */
+public final class NearbyLandmarks {
+
+    private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
+
+    /** Blocks to search outward before giving up on a given zone type. */
+    private static final int SEARCH_RADIUS = 400;
+    /** Cap on distinct discoverable zone types we bother searching for per NPC. */
+    private static final int MAX_ZONE_TYPES = 6;
+    /** Cap on landmarks actually mentioned once found. */
+    private static final int MAX_RESULTS = 2;
+
+    private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
+
+    private NearbyLandmarks() { }
+
+    /**
+     * Returns a short situation-string fragment describing nearby known
+     * landmarks, or "" if nothing could be determined. Defensive by
+     * design - never throws, since this is flavor context for the AI
+     * prompt, not something that should ever break a conversation.
+     */
+    public static String describe(String npcId, Ref<EntityStore> npcRef, Store<EntityStore> store) {
+        return CACHE.computeIfAbsent(npcId, id -> {
+            try {
+                return compute(npcRef, store);
+            } catch (Exception e) {
+                LOGGER.atWarning().log("NearbyLandmarks failed for " + id + ": " + e);
+                return "";
+            }
+        });
+    }
+
+    private static String compute(Ref<EntityStore> npcRef, Store<EntityStore> store) {
+        TransformComponent tc = store.getComponent(npcRef, TransformComponent.getComponentType());
+        if (tc == null) return "";
+        WorldChunk chunk = tc.getChunk();
+        if (chunk == null) return "";
+        World world = chunk.getWorld();
+        if (world == null) return "";
+        IWorldGen gen = world.getChunkStore().getGenerator();
+        if (!(gen instanceof ChunkGenerator cg)) return "";
+
+        Vector3d pos = tc.getPosition();
+        int x = (int) pos.x, y = (int) pos.y, z = (int) pos.z;
+
+        Zone[] zones = cg.getZonePatternProvider().getZones();
+        List<String> found = new ArrayList<>();
+        int checked = 0;
+        for (Zone zone : zones) {
+            if (zone.discoveryConfig() == null || !zone.discoveryConfig().display()) {
+                continue; // skip plain biome noise, keep only real discoverable landmarks
+            }
+            if (checked++ >= MAX_ZONE_TYPES) break;
+            // Search by the internal zone id (Zone.name(), e.g. "Zone1_Spawn")
+            // - that's what ZoneGeneratorResult.getZone().name() compares
+            // against - but DISPLAY the discovery config's own "ZoneName"
+            // (e.g. "Emerald_Wilds"), a proper in-game place name distinct
+            // from the internal id. Confirmed via the real asset JSON
+            // (Server/World/Default/Zones/*/Zone.json's "Discovery" block).
+            String zoneName = zone.name();
+            String displayName = zone.discoveryConfig().zone();
+            if (displayName == null || displayName.isEmpty()) {
+                displayName = zoneName;
+            }
+            Vector3i hit = SpiralSearchUtil.search(cg, x, y, z, SEARCH_RADIUS,
+                    zbr -> {
+                        ZoneGeneratorResult zr = zbr.getZoneResult();
+                        return zr != null && zr.getZone() != null && zoneName.equals(zr.getZone().name());
+                    });
+            if (hit != null) {
+                int dx = hit.x - x, dz = hit.z - z;
+                int distance = (int) Math.round(Math.hypot(dx, dz));
+                found.add(distance + "|" + prettify(displayName) + " to the " + compassDirection(dx, dz)
+                        + " (~" + distance + " blocks)");
+            }
+        }
+        if (found.isEmpty()) return "";
+        found.sort((a, b) -> Integer.compare(
+                Integer.parseInt(a.substring(0, a.indexOf('|'))),
+                Integer.parseInt(b.substring(0, b.indexOf('|')))));
+        StringBuilder sb = new StringBuilder("Nearby landmarks you know of: ");
+        for (int i = 0; i < Math.min(MAX_RESULTS, found.size()); i++) {
+            if (i > 0) sb.append("; ");
+            sb.append(found.get(i).substring(found.get(i).indexOf('|') + 1));
+        }
+        sb.append(".");
+        return sb.toString();
+    }
+
+    private static String prettify(String zoneName) {
+        // Strip a leading "ZoneN_" style prefix and turn underscores into
+        // spaces - cosmetic only, these are internal worldgen asset ids.
+        String cleaned = zoneName.replaceFirst("^Zone\\d+_", "").replace('_', ' ');
+        return cleaned.isEmpty() ? zoneName : cleaned;
+    }
+
+    private static String compassDirection(int dx, int dz) {
+        // Simple 8-way compass. Not confirmed to match Hytale's own in-client
+        // compass convention (which world axis is "north" wasn't verified) -
+        // this is flavor text for an NPC's spoken line, not a navigational HUD.
+        double angle = Math.toDegrees(Math.atan2(dx, -dz));
+        if (angle < 0) angle += 360;
+        String[] dirs = {"north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"};
+        int idx = (int) Math.round(angle / 45.0) % 8;
+        return dirs[idx];
+    }
+}

@@ -1,5 +1,54 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-21: location awareness + NPC-decided taming (map/movement/taming, part 1)
+
+Requested: NPCs that know the map ("where's the nearest town"), can
+temporarily guide a player somewhere depending on server load and their
+own willingness, and can be tamed (max one per player, with the tamed NPC
+getting more memory/resources). Built in two pieces, with a third
+deliberately deferred - see below for why.
+
+**Location awareness - implemented, NOT yet live-verified with a real
+client.** Hytale has no "town" system (procedural terrain, not authored
+settlements) - the real equivalent is a named world-gen `Zone`. Confirmed
+via disassembly that Hytale ships a real "find nearest thing" mechanism
+(`ChunkGenerator.getZonePatternProvider().getZones()` +
+`SpiralSearchUtil.search()`, the same combo behind the built-in
+`/locate zone` command), and confirmed via the actual shipped zone JSON
+(`Server/World/Default/Zones/*/Zone.json`) that most zones carry a real
+`"Discovery"` block with a proper in-fiction place name (e.g.
+`"ZoneName": "Emerald_Wilds"` for the zone around spawn) distinct from
+the internal id (`Zone1_Spawn`) - `NearbyLandmarks.java` uses that name,
+not the raw id. Zone-at-a-coordinate is a pure procedural function backed
+by an in-memory cache (confirmed via disassembly - no chunk loading/disk
+I/O), so it's safe to call synchronously from the game thread; results
+are cached per NPC (they're stationary, so the answer never changes).
+Wired into the `situation` field already sent with every dialogue call -
+no new wire-protocol message needed, the LLM just answers from context
+it's already given. Compiles and boots clean; **needs a real player to
+ask a spawned NPC where something is** to confirm it actually surfaces
+real distances instead of coming back empty.
+
+**NPC-decided taming - implemented AND verified live end to end**, not
+just boot-tested. See below for the architecture and the real test
+transcript (trust-building → genuine model decision → Postgres
+enforcement, cross-checked against the database directly).
+
+**Guiding movement - deliberately deferred.** Confirmed via disassembly
+that real dynamic pathfinding exists (`AStarWithTarget.initComputePath()`
+computes a path to an arbitrary runtime coordinate, `PathFollower` drives
+movement along it), so it's genuinely buildable - but it's raw low-level
+navigation plumbing, not a JSON-authorable action like everything else in
+this plugin, and getting it right (multi-tick movement state, not
+fighting the existing Idle/Watching/`$Interaction` state machine, walking
+back to post afterward) is a meaningfully bigger lift than anything built
+so far. The wire protocol is already forward-compatible for it - the
+orchestrator's `"say"` reply already includes an `"action"` field with
+`OFFER_GUIDE`/`DECLINE_GUIDE` values the NPC itself decides based on its
+personality and role (a merchant won't wander from their post; see
+`llm_client.py`'s `SYSTEM_TEMPLATE`) - the plugin just doesn't act on
+that field yet.
+
 ## 2026-07-21: a cast, not one demo NPC - stable identity + two new characters
 
 With the reply-delivery chain confirmed working end to end, the next step
@@ -315,3 +364,13 @@ Ctrl+C to stop it; `run/` is gitignored.
 13. Load-test llama.cpp slots (`--parallel`/ctx tradeoff) with multiple
     concurrent NPC conversations for real, not just the fake-player test
     client.
+14. ~~NPC location awareness + NPC-decided taming.~~ **Taming done,
+    confirmed live end to end.** Location awareness implemented and
+    boot-tested, **not yet confirmed with a real client** - ask a spawned
+    NPC where something is and see if it names a real place/direction/
+    distance instead of staying vague.
+15. Guiding movement (deliberately deferred - see "part 1" section above
+    for why). The wire protocol already carries `OFFER_GUIDE`/
+    `DECLINE_GUIDE` decisions from the NPC; needs `AStarWithTarget`/
+    `PathFollower` wired into a new NPC action, careful multi-tick state
+    handling, and a "walk back to post afterward" behavior.

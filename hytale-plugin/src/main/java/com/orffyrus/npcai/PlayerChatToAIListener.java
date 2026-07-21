@@ -95,7 +95,7 @@ public class PlayerChatToAIListener {
                 conversation.aiRole(),
                 playerUuid.toString(),
                 content,
-                "");
+                conversation.situation());
 
         return event;
     }
