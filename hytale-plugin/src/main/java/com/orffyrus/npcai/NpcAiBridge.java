@@ -21,13 +21,16 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class NpcAiBridge implements WebSocket.Listener {
 
-    /** (npcId, text, action) - action is one of the orchestrator's
-     * llm_client.VALID_ACTIONS ("none", "offer_guide", "offer_fight",
-     * "decline_guide", "accept_tame", "open_shop"). No built-in
-     * java.util.function type takes three args, hence this. */
+    /** (npcId, text, action, isCompanion) - action is one of the
+     * orchestrator's llm_client.VALID_ACTIONS ("none", "offer_guide",
+     * "offer_fight", "decline_guide", "accept_tame", "open_shop").
+     * isCompanion is the Postgres-backed taming truth (taming.py),
+     * resent on every reply so the plugin's own ephemeral CompanionState
+     * can resync after a restart - see CompanionState.java. No built-in
+     * java.util.function type takes four args, hence this. */
     @FunctionalInterface
     public interface SayHandler {
-        void onSay(String npcId, String text, String action);
+        void onSay(String npcId, String text, String action, boolean isCompanion);
     }
 
     private volatile WebSocket ws;
@@ -122,12 +125,13 @@ public class NpcAiBridge implements WebSocket.Listener {
         String npcId = extract(json, "npc_id");
         String text = extract(json, "text");
         String action = extract(json, "action");
+        boolean isCompanion = extractBoolean(json, "is_companion");
         if (npcId == null) return;
         SayHandler handler = sayHandlers.get(npcId);
         if (handler != null && text != null && !text.isEmpty()) {
             // IMPORTANT: hop back onto the game/entity thread before touching
             // world state - this callback arrives on the websocket thread.
-            handler.onSay(npcId, text, action != null ? action : "none");
+            handler.onSay(npcId, text, action != null ? action : "none", isCompanion);
         }
     }
 
@@ -154,6 +158,19 @@ public class NpcAiBridge implements WebSocket.Listener {
             else sb.append(c);
         }
         return sb.toString();
+    }
+
+    private static boolean extractBoolean(String json, String key) {
+        // Same whitespace-tolerant lookup as extract(), but JSON booleans
+        // are bare literals (true/false), not quoted strings.
+        String keyPat = "\"" + key + "\"";
+        int i = json.indexOf(keyPat);
+        if (i < 0) return false;
+        int colon = json.indexOf(':', i + keyPat.length());
+        if (colon < 0) return false;
+        int start = colon + 1;
+        while (start < json.length() && Character.isWhitespace(json.charAt(start))) start++;
+        return json.regionMatches(start, "true", 0, 4);
     }
 
     @Override

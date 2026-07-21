@@ -144,7 +144,7 @@ async def _build_context(msg: dict) -> NPCContext:
     )
 
 
-async def handle_dialogue(msg: dict) -> tuple[str, str]:
+async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
     ctx = await _build_context(msg)
     raw = await DISPATCHER.request_dialogue(
         ctx.npc_id, lambda: LLM.dialogue(ctx, msg["text"])
@@ -161,6 +161,11 @@ async def handle_dialogue(msg: dict) -> tuple[str, str]:
         player_id = msg.get("player_id", "")
         if player_id and await TAMING.try_tame(ctx.npc_id, player_id):
             logger.info("npc %s tamed by player %s", ctx.npc_id, player_id)
+            # ctx.is_companion was computed in _build_context() BEFORE this
+            # taming happened, so it's still stale False - fix it up now so
+            # the is_companion resync sent below reflects the taming that
+            # just happened on THIS turn, not one turn later.
+            ctx.is_companion = True
         else:
             # The model decided "yes" without knowing about the hard 1-per-
             # player rule (it only reasons about trust, not this
@@ -177,6 +182,9 @@ async def handle_dialogue(msg: dict) -> tuple[str, str]:
         # slip, not a real request to react to in the reply).
         action = "none"
 
+    logger.info("npc %s (player %s): action=%s is_companion=%s",
+                ctx.npc_id, msg.get("player_id", ""), action, ctx.is_companion)
+
     # Remember the exchange (fire-and-forget so we don't add latency)
     _spawn(MEMORY.remember_episode(EpisodicEntry(
         npc_id=ctx.npc_id,
@@ -184,7 +192,11 @@ async def handle_dialogue(msg: dict) -> tuple[str, str]:
         text=f'Player said: "{msg["text"][:200]}". I replied: "{text[:200]}"',
         ts=time.time(),
     )))
-    return text, action
+    # ctx.is_companion is re-checked fresh (Postgres-backed via taming.py,
+    # not the plugin's own ephemeral CompanionState) and returned on every
+    # single turn - see the wire-send comment in plugin_connection() for why
+    # a one-time action=="accept_tame" isn't enough to keep the two in sync.
+    return text, action, ctx.is_companion
 
 
 async def handle_ambient(msg: dict) -> str:
@@ -220,8 +232,9 @@ async def plugin_connection(ws) -> None:
             return
         mtype = msg.get("type")
         try:
+            is_companion = False
             if mtype == "dialogue":
-                text, action = await handle_dialogue(msg)
+                text, action, is_companion = await handle_dialogue(msg)
             elif mtype == "ambient":
                 text, action = await handle_ambient(msg), "none"
             elif mtype == "outcome":
@@ -233,6 +246,16 @@ async def plugin_connection(ws) -> None:
             await ws.send(json.dumps({
                 "type": "say", "req_id": msg.get("req_id", ""),
                 "npc_id": msg["npc_id"], "text": text, "action": action,
+                # Authoritative taming truth (Postgres-backed, survives a
+                # plugin/world restart), resynced on every single reply - not
+                # just when action=="accept_tame" fires. The plugin's own
+                # CompanionState is a plain in-memory map that resets to
+                # empty on every server restart, while this doesn't; without
+                # resending this every turn, a previously-tamed NPC silently
+                # stops following after any restart, because the model has
+                # no reason to re-decide ACCEPT_TAME for a player it already
+                # considers a companion.
+                "is_companion": is_companion,
             }))
         except Exception:
             logger.exception("failed handling %s", mtype)

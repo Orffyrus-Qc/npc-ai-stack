@@ -1,5 +1,7 @@
 package com.orffyrus.npcai;
 
+import com.hypixel.hytale.logger.HytaleLogger;
+
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -16,11 +18,18 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class GuideState {
 
+    private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
     private static final ConcurrentHashMap<String, Boolean> GUIDING = new ConcurrentHashMap<>();
 
     private GuideState() { }
 
     public static void startGuiding(String npcId) {
+        // Logged unconditionally (not just on the true->true no-op case) so
+        // a live test can directly confirm the orchestrator's OFFER_GUIDE
+        // decision actually reached this point, rather than inferring it
+        // indirectly from spoken dialogue text alone.
+        LOGGER.atInfo().log(npcId + " started guiding toward "
+                + NearbyLandmarks.closestPosition(npcId));
         GUIDING.put(npcId, Boolean.TRUE);
     }
 

@@ -86,7 +86,7 @@ public class TalkToAIAction extends ActionBase {
                 playerUuid,
                 new NpcAiPlugin.Conversation(npcId, npcName, aiRole, situation, System.currentTimeMillis()));
 
-        bridge.registerNpc(npcId, (id, text, action) -> {
+        bridge.registerNpc(npcId, (id, text, action, isCompanion) -> {
             // Fires on the WebSocket thread, ~1-2s after this method returns
             // (real LLM round trip). The playerRef captured above may be
             // stale by then, so re-resolve a fresh one from the UUID via
@@ -99,18 +99,22 @@ public class TalkToAIAction extends ActionBase {
                 return;
             }
             freshPlayerRef.sendMessage(Message.raw("[" + npcName + "] " + text));
+            // Resynced from the orchestrator's Postgres-backed taming truth
+            // on EVERY reply, not just when action=="accept_tame" - the
+            // plugin's own CompanionState is a plain in-memory map that
+            // resets on every server restart, while Postgres doesn't, so a
+            // previously-tamed NPC would otherwise never follow again after
+            // a restart (the model has no reason to re-decide ACCEPT_TAME
+            // for a player it already considers a companion).
+            if (isCompanion) {
+                CompanionState.markCompanion(npcId);
+            }
             if ("open_shop".equals(action)) {
                 // Only queues the request (thread-safe, no Store access here) -
                 // see PendingShopOpen's javadoc for why the actual PageManager
                 // call happens later, on the tick thread, in
                 // OpenShopIfRequestedAction instead of directly here.
                 PendingShopOpen.request(playerUuid);
-            } else if ("accept_tame".equals(action)) {
-                // The orchestrator has already enforced the 1-tamed-NPC-
-                // per-player rule server-side by the time this arrives - no
-                // further validation needed here, just flip the flag
-                // IsCompanionSensor checks every tick.
-                CompanionState.markCompanion(npcId);
             } else if ("offer_guide".equals(action)) {
                 // SeekLandmarkSensor checks this every tick and walks toward
                 // NearbyLandmarks.closestPosition(npcId), auto-stopping once

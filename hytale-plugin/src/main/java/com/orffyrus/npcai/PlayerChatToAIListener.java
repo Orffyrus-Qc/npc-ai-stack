@@ -77,7 +77,7 @@ public class PlayerChatToAIListener {
         NpcAiPlugin.ACTIVE_CONVERSATIONS.put(playerUuid, conversation.refreshed());
 
         String npcName = conversation.npcName();
-        bridge.registerNpc(conversation.npcId(), (id, text, action) -> {
+        bridge.registerNpc(conversation.npcId(), (id, text, action, isCompanion) -> {
             // Same staleness concern as TalkToAIAction: this fires on the
             // WebSocket thread after the real LLM round trip, so re-resolve
             // a fresh PlayerRef from the UUID instead of reusing `sender`.
@@ -88,10 +88,14 @@ public class PlayerChatToAIListener {
                 return;
             }
             freshSender.sendMessage(Message.raw("[" + npcName + "] " + text));
+            // Resynced every reply from Postgres-backed taming truth - see
+            // the matching comment in TalkToAIAction for why this can't just
+            // ride on action=="accept_tame" alone.
+            if (isCompanion) {
+                CompanionState.markCompanion(conversation.npcId());
+            }
             if ("open_shop".equals(action)) {
                 PendingShopOpen.request(playerUuid);
-            } else if ("accept_tame".equals(action)) {
-                CompanionState.markCompanion(conversation.npcId());
             } else if ("offer_guide".equals(action)) {
                 GuideState.startGuiding(conversation.npcId());
             }
