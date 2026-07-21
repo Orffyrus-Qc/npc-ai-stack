@@ -35,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 from llm_client import LlamaClient  # noqa: E402
-from personality import PersonalityStore  # noqa: E402
+from personality import OUTCOME_EFFECTS, PersonalityStore  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("npc.skill_writer")
@@ -88,10 +88,17 @@ write code only.
 
 Contract (enforced by an automated test harness, not optional):
 - Define exactly one function: def decide(state: dict) -> dict
-- state may contain: event, player_id, npc_hp, time_of_day, nearby_players \
-(and possibly other keys - ignore ones you don't recognize, never raise on \
-unexpected/missing/malformed input, including negative numbers, huge \
-strings, or None values).
+- state ONLY ever contains these exact keys, with these types - never \
+anything else, and never an outcome name or count (see below):
+  - event: str, one of a small set of canned event names like \
+"player_greets", "player_attacks", "idle_tick" - never an outcome name.
+  - player_id: str or None
+  - npc_hp: int, may be negative or 0
+  - time_of_day: str - free-text description (e.g. "noon", "near the \
+village at dusk"), NOT a number - never compare it with <, >, <=, >=.
+  - nearby_players: int, may be 0
+Never raise on unexpected/missing/malformed values for any of these,
+including negative numbers, huge strings, or None.
 - Return a dict with an "action" key whose value is one of exactly: \
 {actions_list}.
 - If action is "say", include a "text" key: a short string, 1 to {max_say_len} \
@@ -106,13 +113,22 @@ code besides the function definition.
 
     user = f"""NPC id: {npc_id}
 
-Recent outcomes for this NPC (last few days):
+Recent outcomes for this NPC (last few days) - BACKGROUND CONTEXT ONLY, to \
+help you judge what kind of behavior fits this NPC right now. These outcome \
+names/counts are NEVER present in the `state` dict decide() receives at \
+runtime - do not write `state["{{an outcome name}}"]`, `state.get(...)` for \
+one, or `"{{an outcome name}}" in state`. `state` only ever has the 5 keys \
+listed in the contract above; encode what you learn from the history below \
+as fixed logic/thresholds over THOSE keys instead (e.g. "this NPC has \
+recently been treated kindly, so react warmly using nearby_players/event" -
+not "check whether the count from history is present in this call's state"):
 {outcomes_text}
 
 Known mistakes from previously rejected candidate skills (avoid repeating these):
 {rejections_text}
 
-Write a decide(state) that responds sensibly to this NPC's recent history."""
+Write a decide(state) that responds sensibly given this NPC's recent history,
+using ONLY the 5 real state keys to decide what to do on each individual call."""
 
     return [
         {"role": "system", "content": system},
@@ -132,6 +148,41 @@ def _clean_code(raw: str) -> str:
     return text.strip() + "\n"
 
 
+_OUTCOME_NAMES = frozenset(OUTCOME_EFFECTS.keys())
+
+
+def _outcome_name_used_as_state_key(tree: ast.AST) -> str | None:
+    """
+    Static-only (ast.parse already done by the caller, never exec) check for
+    a real hallucination class confirmed against the actual GPU/model: the
+    LLM sees outcome history rendered as context in the prompt (e.g.
+    "player_helped_quest: 6 times") and writes code that treats that same
+    string as if it could appear in the live `state` dict - as a key
+    (`state["player_helped_quest"]`, `"player_helped_quest" in state`) OR,
+    confirmed in a second real generation after the first bug was fixed, as
+    a VALUE being compared against a real field (`state["event"] ==
+    "player_helped_quest"` - event is only ever a canned string like
+    "player_greets"/"player_attacks"/"idle_tick", never an outcome name).
+    Either way the code passes shape validation (syntactically fine, valid
+    dicts on every TEST_STATES case, since none of them reference an
+    outcome name either) but is functionally dead: that branch can never
+    fire on any real call, silently doing nothing forever once approved and
+    actually loaded by orchestrator/skill_runtime.py.
+
+    Broadest reliable check: flag ANY string literal anywhere in the code
+    that exactly matches a known outcome-effect name - a correctly-written
+    decide() has no legitimate reason to reference one at all, regardless
+    of which AST shape the confusion takes.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                and node.value in _OUTCOME_NAMES:
+            return (f'references "{node.value}" literally - that is an outcome NAME from '
+                     'history context (personality.py\'s OUTCOME_EFFECTS), never a real '
+                     'state key or value; state only ever has the 5 keys in the contract')
+    return None
+
+
 def _static_check(code: str) -> str | None:
     """Syntax + shape check only - never imports or executes candidate code.
     Returns an error string, or None if it looks plausible."""
@@ -145,7 +196,7 @@ def _static_check(code: str) -> str | None:
     )
     if not has_decide:
         return "no top-level decide() function found"
-    return None
+    return _outcome_name_used_as_state_key(tree)
 
 
 async def run(sandbox_dir: Path, since_days: float, max_per_run: int,
