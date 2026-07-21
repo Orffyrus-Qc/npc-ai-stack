@@ -1,5 +1,36 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-21: shop-open bug found live - $Interaction is too short-lived
+
+Live testing of the just-shipped shop feature found a real bug: the
+merchant correctly *said* "Of course, let me show you what I've got
+today" (proving the AI decision layer worked end to end), but the actual
+shop UI never opened.
+
+**Root cause**: `OpenShopIfRequestedAction` lived in the `$Interaction`
+state, using `role.getStateSupport().getInteractionIterationTarget()` for
+the player - copying `ActionOpenBarterShop`'s own pattern exactly. But
+`$Interaction` here only lasts **~1 second** before its own `Timeout`
+calls `ReleaseTarget` and moves to `Watching` (that timing was fine for
+the original barter shop, a synchronous open-on-click with no round
+trip) - while the real LLM call that decides `OPEN_SHOP` routinely takes
+longer than 1 second. By the time the reply lands and
+`PendingShopOpen.request()` runs, the state machine has almost always
+already left `$Interaction`, the interaction lock is already released,
+and nothing is checking the flag anymore. The chat message still arrived
+regardless, since `PlayerRef.sendMessage()` is a raw network send
+independent of NPC state - which is exactly what made this confusing to
+diagnose from the symptom alone (half the feature visibly worked).
+
+**Fix**: moved the check into the `Watching` state instead (where a
+conversation actually spends nearly all its time) and switched the
+player-lookup from the transient interaction lock to the same
+`InfoProvider.getPositionProvider().getTarget()` technique
+`NoteNearbyThreatAction` already uses with a plain `"Player"` sensor -
+no dependency on `$Interaction` or its lock's lifetime at all anymore.
+Boot-tested clean; **not yet re-confirmed live with the actual UI opening
+in front of a connected player** - that's the next thing to check.
+
 ## 🎉 2026-07-21: real barter shop, gated by taming - confirmed live, all three cases
 
 Requested: the trader's real inventory/shop should open when talking to

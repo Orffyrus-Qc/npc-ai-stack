@@ -10,17 +10,34 @@ import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import com.hypixel.hytale.server.npc.asset.builder.BuilderSupport;
 import com.hypixel.hytale.server.npc.corecomponents.ActionBase;
 import com.hypixel.hytale.server.npc.role.Role;
+import com.hypixel.hytale.server.npc.sensorinfo.IPositionProvider;
 import com.hypixel.hytale.server.npc.sensorinfo.InfoProvider;
 
 /**
  * Runtime "OpenShopIfRequested" action. Ticks (via a "Continue: true" node
- * in the $Interaction state, alongside the existing HeadMotion:Watch) while
- * a player is talking to this NPC, checking PendingShopOpen for a queued
- * request and - if one exists for the currently interacting player - opens
- * the real barter shop UI exactly the way the real, shipped
- * ActionOpenBarterShop.execute() does (disassembled from HytaleServer.jar):
- * resolve the interaction target -> PlayerRef/Player components ->
+ * alongside the existing "Player"+HeadMotion:Watch sensor in the Watching
+ * state - see NOTE below on why not $Interaction) while a player is nearby,
+ * checking PendingShopOpen for a queued request and - if one exists for the
+ * detected player - opens the real barter shop UI exactly the way the real,
+ * shipped ActionOpenBarterShop.execute() does (disassembled from
+ * HytaleServer.jar): PlayerRef/Player components ->
  * Player.getPageManager().openCustomPage(ref, store, new BarterPage(...)).
+ *
+ * NOTE (real bug found live): this originally lived in the $Interaction
+ * state and used role.getStateSupport().getInteractionIterationTarget() for
+ * the player, matching ActionOpenBarterShop's own pattern. That target is
+ * only valid while $Interaction is active - but $Interaction here only lasts
+ * ~1s (see AI_Talker/Merchant_Oskar.json's "Return to Watching" Timeout)
+ * before ReleaseTarget clears the lock and the state machine moves to
+ * Watching, while the real LLM round trip (where OPEN_SHOP gets decided)
+ * routinely takes longer than that. The chat message still arrived (a raw
+ * PlayerRef.sendMessage(), independent of NPC state), but the shop-open flag
+ * was never read again once out of $Interaction, so it silently never
+ * fired. Fixed by using the same nearby-player detection NoteNearbyThreatAction
+ * already uses (InfoProvider.getPositionProvider().getTarget(), populated by
+ * a plain "Player" sensor rather than the transient interaction lock) and
+ * moving this into the Watching state, which is where a conversation
+ * actually spends most of its time.
  *
  * This runs on the game tick thread (same as every other Action here), so
  * unlike the async WebSocket reply callback, it's safe to touch the Store-
@@ -47,7 +64,11 @@ public class OpenShopIfRequestedAction extends ActionBase {
             return false;
         }
 
-        Ref<EntityStore> targetRef = role.getStateSupport().getInteractionIterationTarget();
+        IPositionProvider posProvider = info.getPositionProvider();
+        if (posProvider == null || !posProvider.hasPosition()) {
+            return false;
+        }
+        Ref<EntityStore> targetRef = posProvider.getTarget();
         if (targetRef == null) {
             return false;
         }

@@ -90,6 +90,20 @@
               }
             },
             {
+              "$Comment": "Open the real barter shop if npc-ai-stack's AI decided OPEN_SHOP. Lives here (Watching), not $Interaction - $Interaction only lasts ~1 tick-second before Timeout/ReleaseTarget ends it, but the real LLM round trip that decides OPEN_SHOP routinely takes longer than that, so a check placed in $Interaction alone misses its window almost every time (confirmed live). Watching is where a conversation actually spends its time.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Player",
+                "Range": 12
+              },
+              "Actions": [
+                {
+                  "Type": "OpenShopIfRequested",
+                  "ShopId": "Klops_Merchant"
+                }
+              ]
+            },
+            {
               "$Comment": "Clear wave animation after delay",
               "Continue": true,
               "Sensor": {
@@ -152,19 +166,6 @@
               "HeadMotion": {
                 "Type": "Watch"
               }
-            },
-            {
-              "$Comment": "Open the real barter shop if npc-ai-stack's AI decided OPEN_SHOP - checked every tick while talking, since the decision arrives async from the LLM round trip",
-              "Continue": true,
-              "Sensor": {
-                "Type": "Any"
-              },
-              "Actions": [
-                {
-                  "Type": "OpenShopIfRequested",
-                  "ShopId": "Klops_Merchant"
-                }
-              ]
             },
             {
               "$Comment": "Return to Watching after interaction ends",
