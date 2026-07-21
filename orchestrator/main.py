@@ -12,8 +12,15 @@ Plugin -> orchestrator:
    "outcome": "player_was_kind"}          # fire-and-forget
 
 Orchestrator -> plugin:
-  {"type": "say", "req_id": "...", "npc_id": "...", "text": "..."}
+  {"type": "say", "req_id": "...", "npc_id": "...", "text": "...", "action": "..."}
   # empty text on ambient = skip this tick (GPU busy) - plugin just no-ops
+  # "action" is one of llm_client.VALID_ACTIONS ("none", "offer_guide",
+  # "decline_guide", "accept_tame") - the NPC's own in-character decision
+  # about what to do next (see llm_client.SYSTEM_TEMPLATE's ACTION tag).
+  # "accept_tame" has already been enforced against the 1-tamed-NPC-per-
+  # player rule (see taming.py) by the time this is sent. "offer_guide"/
+  # "decline_guide" are informational only for now - the plugin doesn't
+  # act on them yet (no guiding/movement implementation exists yet).
 
 The plugin should treat every call as async: send the event, keep ticking,
 apply the "say" whenever it arrives. A 200ms-2s delay reads as the NPC
@@ -29,10 +36,11 @@ import time
 
 import websockets
 
-from llm_client import LlamaClient, NPCContext, Personality
+from llm_client import DialogueResult, LlamaClient, NPCContext, Personality
 from memory import EpisodicEntry, MemoryStore, compress_npc_memory
 from personality import PersonalityStore
 from priority_queue import NPCRequestDispatcher
+from taming import TamingStore
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("npc.orchestrator")
@@ -67,6 +75,7 @@ DISPATCHER = NPCRequestDispatcher(
 LLM = LlamaClient()
 MEMORY = MemoryStore()
 PERSONALITY = PersonalityStore()
+TAMING = TamingStore()
 
 # Per-role defaults; move to config/DB as your cast grows.
 DEFAULT_BASELINES: dict[str, Personality] = {
@@ -87,6 +96,7 @@ async def _build_context(msg: dict) -> NPCContext:
         await MEMORY.recall_similar(npc_id, msg.get("text", msg.get("situation", "")))
         if msg.get("text") or msg.get("situation") else []
     )
+    is_companion = bool(player_id) and await TAMING.get_owner(npc_id) == player_id
     return NPCContext(
         npc_id=npc_id,
         name=msg.get("npc_name", npc_id),
@@ -95,22 +105,43 @@ async def _build_context(msg: dict) -> NPCContext:
         semantic_facts=facts,
         recent_memories=memories,
         location_hint=msg.get("situation", ""),
+        is_companion=is_companion,
     )
 
 
-async def handle_dialogue(msg: dict) -> str:
+async def handle_dialogue(msg: dict) -> tuple[str, str]:
     ctx = await _build_context(msg)
-    reply = await DISPATCHER.request_dialogue(
+    raw = await DISPATCHER.request_dialogue(
         ctx.npc_id, lambda: LLM.dialogue(ctx, msg["text"])
     )
+    if isinstance(raw, DialogueResult):
+        text, action = raw.text, raw.action
+    else:
+        # The dispatcher fell back to its generic "..." string sentinel
+        # (GPU busy / call timed out / call raised) instead of running
+        # LLM.dialogue() - the NPC just visibly "pauses", no action decided.
+        text, action = raw, "none"
+
+    if action == "accept_tame":
+        player_id = msg.get("player_id", "")
+        if player_id and await TAMING.try_tame(ctx.npc_id, player_id):
+            logger.info("npc %s tamed by player %s", ctx.npc_id, player_id)
+        else:
+            # The model decided "yes" without knowing about the hard 1-per-
+            # player rule (it only reasons about trust, not this
+            # constraint) - enforce it here and be upfront about the
+            # mismatch rather than silently pretending the taming worked.
+            action = "none"
+            text += " (Something holds you back from actually committing to this.)"
+
     # Remember the exchange (fire-and-forget so we don't add latency)
     _spawn(MEMORY.remember_episode(EpisodicEntry(
         npc_id=ctx.npc_id,
         player_id=msg.get("player_id", ""),
-        text=f'Player said: "{msg["text"][:200]}". I replied: "{reply[:200]}"',
+        text=f'Player said: "{msg["text"][:200]}". I replied: "{text[:200]}"',
         ts=time.time(),
     )))
-    return reply
+    return text, action
 
 
 async def handle_ambient(msg: dict) -> str:
@@ -147,9 +178,9 @@ async def plugin_connection(ws) -> None:
         mtype = msg.get("type")
         try:
             if mtype == "dialogue":
-                text = await handle_dialogue(msg)
+                text, action = await handle_dialogue(msg)
             elif mtype == "ambient":
-                text = await handle_ambient(msg)
+                text, action = await handle_ambient(msg), "none"
             elif mtype == "outcome":
                 await handle_outcome(msg)
                 return
@@ -158,7 +189,7 @@ async def plugin_connection(ws) -> None:
                 return
             await ws.send(json.dumps({
                 "type": "say", "req_id": msg.get("req_id", ""),
-                "npc_id": msg["npc_id"], "text": text,
+                "npc_id": msg["npc_id"], "text": text, "action": action,
             }))
         except Exception:
             logger.exception("failed handling %s", mtype)
@@ -181,7 +212,7 @@ async def compression_daemon() -> None:
         async def call() -> str:
             ctx = NPCContext(npc_id="_system", name="system", role="archivist",
                              personality=Personality())
-            return await LLM.dialogue(ctx, prompt)
+            return (await LLM.dialogue(ctx, prompt)).text
         result = await DISPATCHER.request_ambient("_compression", call)
         if not result:
             raise RuntimeError("gpu busy, retry later")
@@ -200,6 +231,7 @@ async def compression_daemon() -> None:
 async def main() -> None:
     await MEMORY.start()
     await PERSONALITY.start()
+    await TAMING.start()
     _spawn(compression_daemon())
     async with websockets.serve(plugin_connection, "0.0.0.0", 8765,
                                 ping_interval=20, ping_timeout=20):
