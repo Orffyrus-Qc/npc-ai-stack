@@ -5,7 +5,6 @@ import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.entity.UUIDComponent;
-import com.hypixel.hytale.server.core.entity.entities.Player;
 import com.hypixel.hytale.server.core.universe.PlayerRef;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import com.hypixel.hytale.server.npc.asset.builder.BuilderSupport;
@@ -44,10 +43,6 @@ public class TalkToAIAction extends ActionBase {
         if (playerRef == null) {
             return false;
         }
-        Player player = store.getComponent(targetRef, Player.getComponentType());
-        if (player == null) {
-            return false;
-        }
 
         UUIDComponent npcUuid = store.getComponent(ref, UUIDComponent.getComponentType());
         if (npcUuid == null) {
@@ -61,8 +56,15 @@ public class TalkToAIAction extends ActionBase {
         }
 
         String npcId = npcUuid.getUuid().toString();
-        String npcName = npcId;
-        String playerId = player.getUuid().toString();
+        // getRoleName() ("AI_Talker") rather than the raw entity UUID - not
+        // a per-NPC display name (Role has no such getter that was found),
+        // but at least readable, matching the "visual return to identify
+        // the npc" ask instead of showing a UUID in chat.
+        String npcName = role.getRoleName();
+
+        NpcAiPlugin.ACTIVE_CONVERSATIONS.put(
+                playerRef.getUuid(),
+                new NpcAiPlugin.Conversation(npcId, npcName, System.currentTimeMillis()));
 
         bridge.registerNpc(npcId, (id, text) -> {
             // Fires on the WebSocket thread. PlayerRef.sendMessage() is used
@@ -77,10 +79,10 @@ public class TalkToAIAction extends ActionBase {
 
         bridge.sendDialogue(
                 npcId,
-                npcName != null ? npcName : npcId,
+                npcName,
                 "npc",
-                playerId,
-                "(the player interacts with you)",
+                playerRef.getUuid().toString(),
+                "(the player approaches and interacts with you)",
                 "");
 
         return true;

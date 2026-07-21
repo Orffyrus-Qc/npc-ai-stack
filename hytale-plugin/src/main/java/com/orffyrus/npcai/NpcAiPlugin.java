@@ -1,12 +1,16 @@
 package com.orffyrus.npcai;
 
 import com.hypixel.hytale.logger.HytaleLogger;
+import com.hypixel.hytale.server.core.event.events.player.PlayerChatEvent;
 import com.hypixel.hytale.server.core.event.events.player.PlayerInteractEvent;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
 import com.hypixel.hytale.server.npc.NPCPlugin;
 
 import javax.annotation.Nonnull;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Entry point. Connects to the npc-ai-stack orchestrator (see the repo root
@@ -35,6 +39,20 @@ public class NpcAiPlugin extends JavaPlugin {
      * not by us) can reach it - same singleton pattern NPCPlugin.get() uses. */
     static NpcAiBridge BRIDGE;
 
+    /**
+     * Which NPC each player is currently "in conversation" with, keyed by
+     * PlayerRef UUID. Started by TalkToAIAction on interact; continued or
+     * ended by PlayerChatToAIListener. Deliberately just an in-memory map,
+     * not persisted - conversations don't need to survive a server restart.
+     */
+    static final Map<UUID, Conversation> ACTIVE_CONVERSATIONS = new ConcurrentHashMap<>();
+
+    record Conversation(String npcId, String npcName, long lastActivityMillis) {
+        Conversation refreshed() {
+            return new Conversation(npcId, npcName, System.currentTimeMillis());
+        }
+    }
+
     public NpcAiPlugin(@Nonnull JavaPluginInit init) {
         super(init);
         LOGGER.atInfo().log("Loaded " + this.getName() + " v" + this.getManifest().getVersion());
@@ -51,5 +69,9 @@ public class NpcAiPlugin extends JavaPlugin {
 
         NPCPlugin.get().registerCoreComponentType("TalkToAI", TalkToAIActionBuilder::new);
         LOGGER.atInfo().log("Registered TalkToAI NPC action type");
+
+        PlayerChatToAIListener chatListener = new PlayerChatToAIListener(BRIDGE);
+        this.getEventRegistry().registerAsyncGlobal(PlayerChatEvent.class, chatListener::onChat);
+        LOGGER.atInfo().log("Registered PlayerChatEvent -> AI conversation listener");
     }
 }

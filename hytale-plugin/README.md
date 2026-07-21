@@ -28,6 +28,33 @@ Getting here took three real, live-tested fixes, in order:
    wave animation after a delay) had been dropped while simplifying the
    role JSON from the original `Kweebec_Merchant.json`. Restored verbatim.
 
+## Multi-turn conversation via chat (new, NOT yet live-verified)
+
+Clicking `AI_Talker` now also starts a tracked "conversation" for that
+player (`NpcAiPlugin.ACTIVE_CONVERSATIONS`, keyed by `PlayerRef` UUID).
+While a conversation is active, anything that player types in normal chat
+gets intercepted by `PlayerChatToAIListener` (registered via
+`getEventRegistry().registerAsyncGlobal(PlayerChatEvent.class, ...)` -
+`PlayerChatEvent` is `IAsyncEvent`, a different registration shape than the
+`Consumer`-based `registerGlobal` used elsewhere), cancelled so it never
+hits normal server chat (`event.setCancelled(true)`), and forwarded as the
+real typed text to the AI instead of the canned "the player interacts with
+you" line used on first click. Replies are prefixed with the NPC's role
+name (`Role.getRoleName()`, e.g. `[AI_Talker] ...`) for visual
+identification. Saying "bye"/"goodbye"/"exit"/"leave"/"stop" ends the
+conversation locally without an LLM call; conversations also expire after
+5 minutes of inactivity.
+
+The cancel-suppresses-broadcast contract was confirmed by disassembling
+`GamePacketHandler` (which dispatches `PlayerChatEvent` and checks
+`isCancelled()` before broadcasting to `event.getTargets()`) - but there
+was no existing shipped example of a *listener* for this event to copy
+from (unlike `TalkToAI`, where `ActionOpenBarterShop` was a perfect
+reference). It compiles clean and boots clean
+(`Registered PlayerChatEvent -> AI conversation listener`, no error), but
+**has not yet been exercised by a real player typing in chat** - that's
+the next thing to confirm live.
+
 `PlayerInteractEvent` is still registered in `NpcAiPlugin` but is **not**
 the NPC-talk mechanism - kept only in case it's useful for something else.
 
@@ -118,10 +145,11 @@ Ctrl+C to stop it; `run/` is gitignored.
    + `AI_Talker` role, live-confirmed working end to end.
 4. ~~Confirm a real click reaches the orchestrator.~~ **Done, live** -
    repeated real dialogue round trips confirmed in the orchestrator's logs.
-5. **You are here** - confirm the reply actually shows up as a chat message
-   in-game (`PlayerRef.sendMessage()` was just added, unverified live).
-6. Wire `PlayerChatEvent` for real multi-turn conversation (right now it's
-   one canned "the player interacts with you" per click, not free-text).
+5. ~~Wire `PlayerChatEvent` for real multi-turn conversation.~~ **Done,
+   compiles and boots clean** - `PlayerChatToAIListener` + `ACTIVE_CONVERSATIONS`.
+6. **You are here** - confirm live: does the reply show up as a chat
+   message, and does typing after the first click actually continue the
+   conversation with real text (not just the canned opener)?
 7. Confirm the thread-hop question properly (or find a case where it
-   actually matters - the reply callback doesn't touch entity/world state
+   actually matters - neither reply callback touches entity/world state
    today, only sends a chat message).
