@@ -52,6 +52,16 @@ public class SeekLandmarkSensor extends SensorBase {
         if (mode == null) {
             return false;
         }
+        if (GuideState.hasTimedOut(npcId)) {
+            // Guide has no Continue in Watching's Instructions, so it takes
+            // full priority over companion-follow until this returns false -
+            // without this check, an unreachable/very-far/repeatedly-
+            // re-requested target would leave the NPC beelining toward a
+            // fixed point forever instead of ever following the player again.
+            LOGGER.atInfo().log(npcId + " gave up guiding (target=" + mode + ") after taking too long");
+            GuideState.stopGuiding(npcId);
+            return false;
+        }
         Vector3i target = mode == GuideState.Target.NEAREST_WATER
                 ? NearbyLandmarks.closestWaterPosition(npcId, ref, store)
                 : NearbyLandmarks.closestPosition(npcId);

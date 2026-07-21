@@ -15,6 +15,17 @@ import java.util.concurrent.ConcurrentHashMap;
  * Unlike PendingShopOpen (consume-once), this is persistent while active,
  * same shape as CompanionState - it stays set across many ticks until the
  * NPC arrives (or a caller explicitly stops it).
+ *
+ * Guide takes priority over companion-follow in every role's Watching
+ * Instructions (no Continue on the guide node) - live testing showed that
+ * without a give-up timeout, an NPC whose target is far away, unreachable,
+ * or repeatedly re-requested (almost every reply decides OFFER_GUIDE, even
+ * for generic "I'll follow you" lines) would just keep beelining toward a
+ * fixed point forever instead of ever falling back to following the
+ * player, which from the player's side looks exactly like "he stopped
+ * following me after I talked to him." hasTimedOut() is the safety net for
+ * that: SeekLandmarkSensor checks it every tick and gives up regardless of
+ * why arrival never happened.
  */
 public final class GuideState {
 
@@ -30,8 +41,14 @@ public final class GuideState {
         NEAREST_WATER
     }
 
+    /** Give up and resume normal behavior (companion-follow, if applicable)
+     * after this long without arriving - see the class javadoc. */
+    private static final long MAX_GUIDE_MILLIS = 25_000;
+
+    private record Guiding(Target target, long startedAtMillis) { }
+
     private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
-    private static final ConcurrentHashMap<String, Target> GUIDING = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Guiding> GUIDING = new ConcurrentHashMap<>();
 
     private GuideState() { }
 
@@ -41,7 +58,7 @@ public final class GuideState {
         // actually reached this point, rather than inferring it indirectly
         // from spoken dialogue text alone.
         LOGGER.atInfo().log(npcId + " started guiding (target=" + target + ")");
-        GUIDING.put(npcId, target);
+        GUIDING.put(npcId, new Guiding(target, System.currentTimeMillis()));
     }
 
     public static void stopGuiding(String npcId) {
@@ -54,6 +71,15 @@ public final class GuideState {
 
     /** The active guide mode for this NPC, or null if not currently guiding. */
     public static Target getTarget(String npcId) {
-        return GUIDING.get(npcId);
+        Guiding g = GUIDING.get(npcId);
+        return g != null ? g.target() : null;
+    }
+
+    /** True once this NPC has been guiding longer than MAX_GUIDE_MILLIS
+     * without arriving - SeekLandmarkSensor should give up regardless of
+     * the reason (unreachable, too far, re-requested repeatedly). */
+    public static boolean hasTimedOut(String npcId) {
+        Guiding g = GUIDING.get(npcId);
+        return g != null && (System.currentTimeMillis() - g.startedAtMillis()) > MAX_GUIDE_MILLIS;
     }
 }
