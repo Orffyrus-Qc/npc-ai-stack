@@ -90,7 +90,24 @@
               }
             },
             {
-              "$Comment": "Return to Idle when player leaves",
+              "$Comment": "Clear wave animation after delay",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Any"
+              },
+              "Actions": [
+                {
+                  "Type": "Timeout",
+                  "Delay": [ 2, 2 ],
+                  "Action": {
+                    "Type": "PlayAnimation",
+                    "Slot": "Status"
+                  }
+                }
+              ]
+            },
+            {
+              "$Comment": "Return to Idle when player leaves (clear animation first)",
               "Sensor": {
                 "Type": "Not",
                 "Sensor": {
@@ -99,6 +116,10 @@
                 }
               },
               "Actions": [
+                {
+                  "Type": "PlayAnimation",
+                  "Slot": "Status"
+                },
                 {
                   "Type": "State",
                   "State": "Idle"
