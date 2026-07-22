@@ -808,6 +808,72 @@ like "take me to a desert"/"find the temple", fall behind deliberately
 during a guide to see it wait, and put a hostile in the path to see it
 route around rather than fight).
 
+## 2026-07-22, later still: investigated "npc stopped working" - two real bugs, found from the actual session log, not guessed
+
+User: "investigate why npc stopped working." Rather than assume it was a
+recurrence of an earlier fix or guess at a cause, pulled the actual most
+recent server log (`docker compose ps`/`logs` first to rule out an
+orchestrator-side crash - none found, all services healthy, zero
+errors - then the real Hytale server log for the session in question).
+Found two distinct, real, previously-undetected bugs directly in the log
+text, both introduced by earlier fixes/features shipped today.
+
+**Bug 1 - malformed tags leaking into visible chat.** The log showed
+`"...adventurers. TONED: KIND"` and `"...treating you out here?
+GUIDE_TARGET: landmark"` - actual tag text appearing as if the NPC said
+it. Root cause: the model doesn't always produce tags in the EXACT
+expected format (confirmed: "TONED:" instead of "TONE:" - a stray extra
+character) - the specific per-tag regexes require an exact match, so a
+malformed tag matches NONE of them, `_parse_dialogue_response()`'s
+truncate-at-earliest-tag logic (added earlier today for the trailing-
+hallucination bug) has nothing to truncate AT, and the raw tag text
+survives straight into the displayed message. This also retroactively
+explains the ORIGINAL "su2014"-shaped report from earlier today - almost
+certainly the same underlying "unrecognized tag variant" class of bug,
+just a different word next to a different malformed tag, not
+specifically the em-dash-escape bug that got fixed in between (that fix
+was real and correct, just for a different occurrence of the same
+general symptom).
+
+Fixed two ways, together: (1) widened the specific tag regexes with an
+optional `\w?` right before the colon (tolerates one stray character:
+"TONE:"/"TONED:" both match now, and the value actually gets recovered,
+not just excluded) and (2) added `_GENERIC_TAG_RE`, a defense-in-depth
+pattern matching ANY all-caps-word-then-colon shape anywhere in the raw
+text - real spoken dialogue never looks like "CAPSWORD:", so any
+occurrence of that shape is treated as a tag boundary even if it's a
+completely unanticipated tag name/typo this file has never seen. Verified
+against the exact two real strings from the log (both now clean, and the
+first's TONE value is actually recovered as "kind" instead of silently
+defaulting to neutral) plus a 5-case regression battery including a
+false-positive check (ordinary dialogue containing a lowercase-following
+colon, e.g. "He said this: ...", must NOT get truncated - confirmed it
+doesn't, since the generic pattern requires genuine ALL-CAPS).
+
+**Bug 2 - every keyword-based guide request failed.** The log showed
+`GuideState: started guiding (target=NAMED, keyword=flower)` immediately
+followed by `SeekLandmarkSensor: couldn't find a NAMED to guide toward -
+giving up`, and the same for `keyword=wilderness` (twice). Neither
+"flower" nor "wilderness" is a substring of any real zone name (e.g.
+"Emerald_Wilds" doesn't contain "wilderness") or real prefab name - a
+genuinely expected limitation (the model can't know Hytale's exact
+internal asset names), not a code bug in the search itself. The real
+problem is the FAILURE MODE: giving up entirely left the companion doing
+nothing for every one of these requests, which from the player's side is
+indistinguishable from "the guide feature stopped working" - exactly
+matching the vague bug report. Fixed: `SeekLandmarkSensor` now falls back
+to the general nearest-landmark search when a NAMED search finds nothing,
+instead of stopping guiding outright - "I don't know a place called that,
+but here's somewhere I do know" beats doing nothing.
+
+Boot-tested via a real `./gradlew runServer` boot: clean validation, no
+errors. Checked process safety again before cleanup (only the Gradle
+daemon was running - the user's own session had already ended per the
+log's own `Shut down plugin com.orffyrus:NpcAiStack` line). Jar rebuilt
+and reinstalled, orchestrator redeployed. Not yet re-confirmed live (both
+fixes are directly verified against the real captured failure text/log
+lines, but need a fresh play session to confirm they don't recur).
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/

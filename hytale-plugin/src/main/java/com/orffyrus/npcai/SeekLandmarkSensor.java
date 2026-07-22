@@ -68,6 +68,21 @@ public class SeekLandmarkSensor extends SensorBase {
         } else if (mode == GuideState.Target.NAMED) {
             String keyword = GuideState.getKeyword(npcId);
             target = keyword != null ? NearbyLandmarks.closestNamedPosition(npcId, keyword, ref, store) : null;
+            if (target == null) {
+                // 2026-07-22 real bug found live: every NAMED search in a
+                // real session failed ("keyword=flower", "keyword=wilderness"
+                // - neither is a substring of any real zone/prefab name),
+                // and giving up outright meant the companion just stood
+                // there doing nothing for every one of those requests -
+                // from the player's side, indistinguishable from "the guide
+                // feature stopped working." A specific keyword not matching
+                // anything is a real, expected limitation (the model can't
+                // know Hytale's exact internal asset names), so fall back to
+                // the general nearest-landmark search instead of stopping
+                // guiding entirely - "I don't know a place called that, but
+                // here's somewhere I do know" beats doing nothing.
+                target = NearbyLandmarks.closestPosition(npcId);
+            }
         } else {
             target = NearbyLandmarks.closestPosition(npcId);
         }

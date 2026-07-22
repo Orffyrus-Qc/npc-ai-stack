@@ -1,5 +1,38 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: "npc stopped working" - two real bugs found in the actual session log
+
+Investigated "npc stopped working" by pulling the real server log first
+(after ruling out an orchestrator crash - none, all services healthy)
+rather than guessing. Found two distinct real bugs, both introduced by
+today's earlier features.
+
+**Malformed tags leaking into chat**: the log showed literal
+`"...adventurers. TONED: KIND"` and `"...treating you? GUIDE_TARGET:
+landmark"` in displayed messages. The model doesn't always produce tags
+in the exact expected format (confirmed: "TONED:" instead of "TONE:"),
+which none of the specific tag regexes matched, so the truncate-at-
+earliest-tag logic (added earlier today) had nothing to truncate at and
+the raw tag text leaked straight through. Likely the same underlying
+cause as the original "su2014" report, not the em-dash-escape bug that
+got fixed separately in between. Fixed two ways: specific regexes now
+tolerate one stray character before the colon (recovers the actual value
+too, not just hides it), plus a new defense-in-depth pattern that treats
+ANY all-caps-word-then-colon shape as a tag boundary regardless of
+whether it's a name this file specifically recognizes - real dialogue
+never looks like that, so it's safe to always exclude.
+
+**Every keyword-based guide request failed**: the log showed
+`keyword=flower` and `keyword=wilderness` both immediately giving up.
+Neither is a substring of any real zone/prefab name - an expected
+limitation, not a search bug - but giving up outright left the companion
+doing nothing, indistinguishable from "guide feature is broken." Fixed:
+falls back to the general nearest-landmark search instead of stopping
+guiding entirely when a specific keyword search finds nothing.
+
+Both verified directly against the real captured log text. Boot-tested
+clean, jar reinstalled, orchestrator redeployed.
+
 ## 2026-07-22, later still: real keyword map search, wait-for-player pacing, combat-avoidance while guiding
 
 Requested: "npc know the map and can lead me... to find what I need," a

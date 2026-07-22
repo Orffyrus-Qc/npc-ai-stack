@@ -314,15 +314,32 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
     ]
 
 
-_ACTION_TAG_RE = re.compile(r"\s*ACTION:\s*([A-Z_]+)\.?", re.IGNORECASE)
-_TONE_TAG_RE = re.compile(r"\s*TONE:\s*([A-Z_]+)\.?", re.IGNORECASE)
-_THREAD_TAG_RE = re.compile(r"\s*THREAD:\s*([A-Z_]+)\.?", re.IGNORECASE)
+# "\w?" right before the colon tolerates a stray trailing character the
+# model occasionally adds (confirmed live: "TONED: KIND" instead of
+# "TONE: KIND") without losing the ability to still parse a genuinely
+# different tag name that happens to share a prefix.
+_ACTION_TAG_RE = re.compile(r"\s*ACTION\w?:\s*([A-Z_]+)\.?", re.IGNORECASE)
+_TONE_TAG_RE = re.compile(r"\s*TONE\w?:\s*([A-Z_]+)\.?", re.IGNORECASE)
+_THREAD_TAG_RE = re.compile(r"\s*THREAD\w?:\s*([A-Z_]+)\.?", re.IGNORECASE)
 # Free text, not a fixed [A-Z_]+ word like the tags above - captures to end
 # of line only (non-greedy, stops at the first newline) so a THREAD_SUMMARY
 # accidentally followed by more text on later lines doesn't get swallowed.
-_THREAD_SUMMARY_TAG_RE = re.compile(r"\s*THREAD_SUMMARY:\s*(.+?)\s*(?:\n|$)", re.IGNORECASE)
+_THREAD_SUMMARY_TAG_RE = re.compile(r"\s*THREAD_SUMMARY\w?:\s*(.+?)\s*(?:\n|$)", re.IGNORECASE)
 # Same free-text shape as THREAD_SUMMARY - see its comment.
-_GUIDE_TARGET_TAG_RE = re.compile(r"\s*GUIDE_TARGET:\s*(.+?)\s*(?:\n|$)", re.IGNORECASE)
+_GUIDE_TARGET_TAG_RE = re.compile(r"\s*GUIDE_TARGET\w?:\s*(.+?)\s*(?:\n|$)", re.IGNORECASE)
+# Defense-in-depth, not a replacement for the specific regexes above: real
+# bug found live 2026-07-22 - "TONED: KIND" (a typo variant of "TONE: KIND"
+# the model produced) didn't match ANY specific tag regex at all, so
+# _parse_dialogue_response()'s tag_start truncation never triggered for
+# that turn and the raw tag text leaked straight into the displayed chat
+# message ("...adventurers. TONED: KIND"). Real spoken dialogue never
+# looks like "CAPSWORD:" - that shape is unambiguously tag/metadata, not
+# natural language - so ANY occurrence of it, even one this file has never
+# specifically named, is treated as a tag boundary. This catches
+# unanticipated future typos/variants the same way, at the cost of only
+# excluding the text (not parsing its value) when it doesn't also match a
+# specific regex above.
+_GENERIC_TAG_RE = re.compile(r"\b[A-Z][A-Z_]{2,24}:(?:\s|$)")
 
 
 def _parse_dialogue_response(raw: str) -> DialogueResult:
@@ -391,6 +408,16 @@ def _parse_dialogue_response(raw: str) -> DialogueResult:
             # OPEN with no usable summary isn't worth tracking - there'd be
             # nothing to show the player later via THREAD_HINT_TEMPLATE.
             thread_action = "none"
+
+    # Defense-in-depth pass (see _GENERIC_TAG_RE's own comment): catches any
+    # tag-shaped text none of the specific regexes above recognized (a typo
+    # variant, or a genuinely new tag this function doesn't know about yet),
+    # so it still gets excluded from the spoken text even though its value
+    # couldn't be parsed. Harmless overlap with the specific matches above -
+    # taking the minimum just reinforces the same (or an earlier) cutoff.
+    m = _GENERIC_TAG_RE.search(raw)
+    if m:
+        tag_start = min(tag_start, m.start())
 
     text = raw[:tag_start].strip().strip('"').strip()
     return DialogueResult(text=text, action=action, tone=tone,
