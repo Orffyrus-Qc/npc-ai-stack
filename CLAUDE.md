@@ -472,6 +472,58 @@ errors tied to the new `And`/`Not`/`Target` structure or the added
 `HeadMotion`. Jar rebuilt and reinstalled. Not yet live-confirmed (needs a
 real fight to watch the companion's head during).
 
+## 2026-07-22, later still: real bug - dialogue trailing off into hallucinated garbage after tags
+
+Live-tested report: "many times ai drop out context nickname following by
+year date, example: su2014" - the NPC's reply would occasionally trail off
+after otherwise-normal dialogue into unrelated hallucinated text shaped
+like a name-plus-year token (e.g. "su2014").
+
+**Ruled out every real data source before touching a line of code**:
+checked `player_name` for this actual session (`Discord banner check:
+...username=Orffyrus` in the real client log - nowhere close to "su2014"),
+queried `semantic_facts` in Postgres directly (12 real rows, all
+coherent, all correctly reference "Orffyrus"), scanned all 212
+`npc_episodic` points and all 865 `wiki_knowledge` points in Qdrant for
+any name+year-shaped substring - zero matches anywhere. None of the four
+things that feed the prompt contained this text, which pointed at the LLM
+generating it fresh in its own raw completion, not recalling/leaking it
+from anywhere.
+
+**Root cause, reproduced exactly before fixing**: `LlamaClient.dialogue()`
+deliberately has no stop token (its own comment explains why - removed to
+leave room for up to four tag lines: ACTION, TONE, THREAD, THREAD_SUMMARY).
+With nothing to stop it, the model sometimes keeps generating PAST its
+last real tag into unrelated hallucinated text. `_parse_dialogue_response()`
+only ever substituted out the MATCHED tag spans themselves (`_ACTION_TAG_RE
+.sub("", raw)` etc.) - any trailing hallucinated content the model
+generated after the last tag was never touched by those substitutions and
+survived straight into the spoken text shown to the player. Confirmed by
+reproducing it directly:
+```python
+_parse_dialogue_response('Careful out there, friend.\nACTION: NONE\nTONE: KIND\nTHREAD: NONE\nsu2014')
+# .text was 'Careful out there, friend.\nsu2014' before the fix
+```
+
+**Fix**: rewrote `_parse_dialogue_response()` to truncate the spoken text
+at the position of the EARLIEST matched tag (across ACTION/TONE/THREAD/
+THREAD_SUMMARY) instead of substituting out individual matched spans -
+everything from the first real tag onward (the tags themselves, plus any
+hallucinated ramble after them) is now tag region, not spoken text. Safe
+because every real, observed case has tags clustering at/after the end of
+the spoken line, never interspersed within it (this was already
+established from the ACTION-tag-only era).
+
+Verified against 6 scenarios including the exact reproduced bug, all
+previous THREAD-tag test cases (still pass unchanged), and a new combined
+worst case (THREAD_SUMMARY followed by trailing hallucinated garbage) -
+all correct. Deployed: `docker compose up -d --build orchestrator`, clean
+restart (`orchestrator listening on :8765`, a real `wiki refresh cycle`
+completed with 0 errors right after), no exceptions. Not yet re-confirmed
+against a live conversation actually producing this failure mode again
+(needs extended play to see if it recurs - inherently intermittent since
+it depends on the model choosing to ramble).
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/

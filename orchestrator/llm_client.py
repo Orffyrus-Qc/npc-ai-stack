@@ -313,48 +313,65 @@ _THREAD_SUMMARY_TAG_RE = re.compile(r"\s*THREAD_SUMMARY:\s*(.+?)\s*(?:\n|$)", re
 def _parse_dialogue_response(raw: str) -> DialogueResult:
     """
     Extracts the ACTION/TONE/THREAD(+THREAD_SUMMARY) tags (see
-    SYSTEM_TEMPLATE) and strips them back out of the spoken text. Live
-    testing against the real model showed it reliably appends "ACTION: X" to
-    the END OF THE SAME LINE as the spoken text rather than a separate line
-    as instructed (worse, on ambient calls with a "\\n" stop token it
-    sometimes emitted *only* the tag, no spoken text at all) - so this can't
-    assume line position. A regex substitution anywhere in the raw text is
-    robust to both cases; the same treatment applies to TONE and THREAD,
-    added later - a missing/garbled tag just falls back to its default
-    (action="none", tone="neutral", thread_action="none") without affecting
-    the spoken text.
+    SYSTEM_TEMPLATE) and strips them - and everything from the first tag
+    onward - back out of the spoken text. Live testing against the real
+    model showed it reliably appends "ACTION: X" to the END OF THE SAME LINE
+    as the spoken text rather than a separate line as instructed (worse, on
+    ambient calls with a "\\n" stop token it sometimes emitted *only* the
+    tag, no spoken text at all) - so this can't assume line position. A
+    regex search anywhere in the raw text is robust to both cases.
+
+    2026-07-22 real bug found live: dialogue() has no stop token at all (see
+    its own comment - removed to leave room for up to four tag lines), so
+    the model sometimes keeps generating PAST its last tag into unrelated
+    hallucinated text (a name-shaped token followed by digits was the
+    reported symptom, e.g. "su2014" - confirmed NOT coming from
+    player_name/semantic_facts/episodic memory/wiki_knowledge by checking
+    each directly; this is the model rambling with nothing to stop it).
+    The old approach only substituted out the MATCHED tag spans themselves,
+    so trailing hallucinated content after the last tag survived untouched
+    and got shown to the player as if it were dialogue. Fixed by truncating
+    the spoken text at the position of the EARLIEST matched tag instead -
+    everything from there on (real tags plus any hallucinated trailing
+    ramble) is tag region, not spoken text. Safe because every real,
+    observed case has tags appearing at/after the end of the spoken line,
+    never interspersed within it.
     """
     action = "none"
+    tone = "neutral"
+    thread_action = "none"
+    thread_summary = ""
+    tag_start = len(raw)
+
     m = _ACTION_TAG_RE.search(raw)
     if m:
+        tag_start = min(tag_start, m.start())
         candidate = m.group(1).strip().lower()
         if candidate in VALID_ACTIONS:
             action = candidate
-    tone = "neutral"
     m = _TONE_TAG_RE.search(raw)
     if m:
+        tag_start = min(tag_start, m.start())
         candidate = m.group(1).strip().lower()
         if candidate in VALID_TONES:
             tone = candidate
-    thread_action = "none"
     m = _THREAD_TAG_RE.search(raw)
     if m:
+        tag_start = min(tag_start, m.start())
         candidate = m.group(1).strip().lower()
         if candidate in VALID_THREAD_ACTIONS:
             thread_action = candidate
-    thread_summary = ""
     if thread_action == "open":
         m = _THREAD_SUMMARY_TAG_RE.search(raw)
         if m:
+            tag_start = min(tag_start, m.start())
             thread_summary = m.group(1).strip().strip('"').strip()
         if not thread_summary:
             # OPEN with no usable summary isn't worth tracking - there'd be
             # nothing to show the player later via THREAD_HINT_TEMPLATE.
             thread_action = "none"
-    text = _ACTION_TAG_RE.sub("", raw)
-    text = _TONE_TAG_RE.sub("", text)
-    text = _THREAD_SUMMARY_TAG_RE.sub("", text)
-    text = _THREAD_TAG_RE.sub("", text).strip().strip('"').strip()
+
+    text = raw[:tag_start].strip().strip('"').strip()
     return DialogueResult(text=text, action=action, tone=tone,
                            thread_action=thread_action, thread_summary=thread_summary)
 
