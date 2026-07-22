@@ -1,5 +1,43 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: guide to a precise location - hooked into Hytale's real, native map markers
+
+Asked what could improve precise-location guiding. Checked first whether
+Hytale has a native waypoint/marker mechanism rather than assuming a
+custom Postgres table was needed - it does: disassembling
+`HytaleServer.jar` found a complete, real, already-shipped player
+map-marker system (`WorldMapManager.handleUserCreateMarker()`, backed by
+`WorldMarkersResource implements UserMapMarkersStore`) - the client sends
+a real `CreateUserMarker` packet when a player drops a named pin via the
+game's own map UI. This plugin never creates markers, only reads what the
+player already placed themselves.
+
+New `NearbyLandmarks.closestPlayerMarkerPosition()` fetches that specific
+player's own markers (`getUserMapMarkers(UUID)` - never another player's)
+via the same `world.getChunkStore().getStore().getResource(...)` pattern
+already used for the world-gen generator, substring-matches the keyword
+against marker names. `SeekLandmarkSensor`'s NAMED search now checks this
+FIRST, falling back to the existing zone/prefab fuzzy search only if the
+player has no matching marker - a player's own named pin ("home", "the
+mine") is exact, strictly better than a guess against internal asset
+names whenever one exists.
+
+`GuideState` needed a real code change to support this: `offer_guide`
+isn't gated on companion status, so it now tracks WHICH player's chat
+triggered each guide (not assumed to be the tamed owner) so the marker
+search knows whose markers to check.
+
+Also tweaked `llm_client.py`'s GUIDE_TARGET prompt rule to preserve a
+specific place name verbatim instead of always generalizing to a
+category - tested against the live model, it doesn't always follow this
+(kept generalizing "Steve's fort" to "fort"), but the substring-based
+search design tolerates that in the realistic case (a marker literally
+named "Steve's Fort" still matches "fort").
+
+Boot-tested clean, jar rebuilt/reinstalled, orchestrator redeployed. The
+one thing that genuinely needs the user's own session: placing a real map
+marker and asking to be guided to it by name - not drivable from here.
+
 ## 2026-07-22, later still: "npc begin to lead but return to his following duty" - two real timing bugs
 
 First real in-game report on the guide feature. Checked the actual running

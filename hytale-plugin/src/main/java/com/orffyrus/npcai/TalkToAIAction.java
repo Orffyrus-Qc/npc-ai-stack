@@ -152,7 +152,7 @@ public class TalkToAIAction extends ActionBase {
                         // remember"), and falls back to NEAREST_LANDMARK
                         // itself (via the empty/"landmark" case) when it
                         // has nothing specific in mind either.
-                        GuideState.startGuidingFromKeyword(id, guideTarget);
+                        GuideState.startGuidingFromKeyword(id, playerUuid, guideTarget);
                     }
                 });
 

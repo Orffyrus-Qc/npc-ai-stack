@@ -134,7 +134,7 @@ public class PlayerChatToAIListener {
                         // in the first place, so it can extract a much
                         // richer keyword ("temple", "desert", "cave", ...)
                         // than a fixed water-or-not binary ever could.
-                        GuideState.startGuidingFromKeyword(id, guideTarget);
+                        GuideState.startGuidingFromKeyword(id, playerUuid, guideTarget);
                     }
                 });
 

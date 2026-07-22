@@ -1779,6 +1779,77 @@ completion budget to actually move the ceiling. Should have read the
 Tuning table below and the load-test table in README.md before touching
 this at all - flagging that as the mistake, not just the fix.
 
+## 2026-07-22, later still: guide to a PRECISE location - hooked into Hytale's real, native map-marker system
+
+Asked "what can be improved to let the NPC lead the player to a precise
+location." The honest answer: guiding could only ever reach places Hytale
+itself already names (zones/prefabs via keyword substring match) - it had
+no way to reach a location the PLAYER cares about (their base, an ore vein
+they found, anywhere not a vanilla asset). Recommended checking whether
+Hytale has a native waypoint/marker mechanism before building custom
+storage, rather than assuming a new Postgres table was needed.
+
+**It does.** Disassembled `HytaleServer.jar` and found a complete, real,
+already-shipped player map-marker system: the client sends a real
+`CreateUserMarker` packet (the game's own map UI - a player drops a pin and
+names it) handled by `WorldMapManager.handleUserCreateMarker()`, backed by
+`WorldMarkersResource` (a per-world `Resource<ChunkStore>`) which
+implements `UserMapMarkersStore` (`getUserMapMarkers(UUID)` - only that
+player's own markers, `UserMapMarker.getName()/getX()/getZ()`). This
+plugin never creates markers - it only reads what the player already
+placed via the game's own UI, exactly the "player already knows how to do
+this" UX a custom "remember this spot" chat command would have had to
+reinvent.
+
+**Access path**, same `ChunkStore`/`Store` pair `NearbyLandmarks.
+computeWater()`/`computeNamed()` already use for `getGenerator()`: `world.
+getChunkStore().getStore().getResource(WorldMarkersResource.
+getResourceType())`. Everything involved is public (unlike
+`PrefabSearchUtil`'s package-private problem from the earlier map-search
+work) - no new registration needed, since this is a built-in vanilla
+resource type every world already has.
+
+**New `NearbyLandmarks.closestPlayerMarkerPosition(npcId, keyword,
+playerId, ref, store)`** - substring-matches the keyword against that
+player's own marker names, picks the closest if more than one matches.
+Deliberately NOT cached like the zone/prefab searches - a player can
+add/rename/remove their own markers any time, unlike world-gen positions
+which never change for a fixed NPC, and it's a cheap lookup (no spiral
+search), so there's no reason to risk serving a stale answer.
+
+**`GuideState` gained player-identity tracking.** `offer_guide` isn't
+gated on companion status (any player conversation can trigger it, see
+`TalkToAIAction`/`PlayerChatToAIListener`), so "whose markers to search"
+needed its own field - `Guiding` now carries the requesting player's UUID
+(both real trigger sites already had `playerUuid` in scope), with a new
+`getPlayerId()` accessor. `SeekLandmarkSensor`'s NAMED branch now checks
+`closestPlayerMarkerPosition()` FIRST, falling back to the existing
+zone/prefab `closestNamedPosition()` only if the player has no matching
+marker of their own - a player's own named pin is exact and precise,
+strictly better than a fuzzy asset-name guess whenever one exists.
+
+**Prompt tweak, not strictly required but worth doing**: `llm_client.py`'s
+GUIDE_TARGET rule now tells the model to preserve a specific place NAME
+("home", "my base", "Steve's fort") as the keyword verbatim, instead of
+always generalizing to a category word, since a specific name is more
+likely to substring-match a real marker. Real-model test after
+redeploying: "take me to Steve's fort" still came back as `guide_target:
+'fort'`, not the full name - the model doesn't always follow this
+instruction. Not a blocker though: the search is substring-based, and
+"fort" still matches a marker literally named "Steve's Fort", so the
+mechanism tolerates the model's generalizing tendency in the realistic
+case. Separately noticed (pre-existing, not caused by this change): "lead
+me back to my home" got `action: none` instead of `offer_guide` from the
+live model on one real test - LLM sampling variance in action selection,
+not something this change touches or fixes.
+
+Boot-tested clean (`./gradlew runServer`, `Hytale Server Booted!`, no
+errors registering any of the existing sensors/actions/filters), jar
+rebuilt and reinstalled, orchestrator redeployed. What's still genuinely
+untested: the actual marker-lookup path itself needs the user to place a
+real map marker via the in-game map UI and then ask to be guided there by
+that name - not something drivable from here.
+
 ## Tuning table
 
 See README.md — it maps symptoms (slow dialogue, world stutter, OOM) to the

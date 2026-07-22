@@ -7,8 +7,11 @@ import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
+import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import com.hypixel.hytale.server.core.universe.world.worldgen.IWorldGen;
+import com.hypixel.hytale.server.core.universe.world.worldmap.markers.user.UserMapMarker;
+import com.hypixel.hytale.server.core.universe.world.worldmap.markers.worldstore.WorldMarkersResource;
 import com.hypixel.hytale.server.worldgen.chunk.ChunkGenerator;
 import com.hypixel.hytale.server.worldgen.container.UniquePrefabContainer;
 import com.hypixel.hytale.server.worldgen.zone.Zone;
@@ -17,8 +20,10 @@ import org.joml.Vector3d;
 import org.joml.Vector3i;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -179,6 +184,88 @@ public final class NearbyLandmarks {
     }
 
     /**
+     * Nearest of the requesting PLAYER'S OWN real, native Hytale map markers
+     * whose name matches the keyword - a player-placed, player-named pin
+     * dropped via the game's own map UI (client sends a real
+     * `CreateUserMarker` packet, handled by the real, shipped
+     * `WorldMapManager.handleUserCreateMarker()`; confirmed via disassembly
+     * of HytaleServer.jar v0.5.7). This plugin never creates markers - it
+     * only reads what the player already placed themselves, the same way
+     * `describe()`/`closestNamedPosition()` only ever read world-gen data.
+     *
+     * Access path (confirmed via disassembly, no equivalent of
+     * PrefabSearchUtil's package-private problem here - everything below is
+     * public): `WorldMarkersResource` implements the real
+     * `UserMapMarkersStore` interface and is a per-world ECS `Resource`
+     * (`Resource<ChunkStore>`, keyed by the real, shipped
+     * `WorldMarkersResource.getResourceType()`) - fetched via
+     * `world.getChunkStore().getStore().getResource(...)`, the exact same
+     * `ChunkStore`/`Store` pair `compute()`/`computeWater()` already use for
+     * `getGenerator()` above, just asking for a different resource type off
+     * the same store. `getUserMapMarkers(UUID)` returns only that specific
+     * player's own markers - never another player's - so this can never
+     * leak one player's marked locations into another's guide request.
+     *
+     * Deliberately NOT cached like the zone/prefab searches below - a
+     * player can add, rename, or remove their own markers at any time
+     * (unlike world-gen, which never changes for a fixed NPC position), and
+     * this is a cheap in-memory lookup + linear scan of one player's own
+     * markers (never a spiral search over generated terrain), so there's no
+     * performance reason to cache a possibly-stale answer.
+     *
+     * Returns null if the player has no markers, none match the keyword, or
+     * anything about the lookup fails - callers (SeekLandmarkSensor) treat
+     * that as "no matching marker" and fall through to the world-gen
+     * zone/prefab search instead, never as an error.
+     */
+    public static Vector3i closestPlayerMarkerPosition(String npcId, String keyword, UUID playerId,
+                                                        Ref<EntityStore> npcRef, Store<EntityStore> store) {
+        try {
+            TransformComponent tc = store.getComponent(npcRef, TransformComponent.getComponentType());
+            if (tc == null) return null;
+            WorldChunk chunk = tc.getChunk();
+            if (chunk == null) return null;
+            World world = chunk.getWorld();
+            if (world == null) return null;
+
+            ChunkStore chunkStore = world.getChunkStore();
+            WorldMarkersResource markers = chunkStore.getStore().getResource(WorldMarkersResource.getResourceType());
+            if (markers == null) return null;
+            Collection<? extends UserMapMarker> playerMarkers = markers.getUserMapMarkers(playerId);
+            if (playerMarkers == null || playerMarkers.isEmpty()) return null;
+
+            IWorldGen gen = chunkStore.getGenerator();
+            if (!(gen instanceof ChunkGenerator cg)) return null;
+            int seed = (int) world.getWorldConfig().getSeed();
+
+            Vector3d pos = tc.getPosition();
+            double x = pos.x, z = pos.z;
+            String needle = keyword.toLowerCase();
+
+            UserMapMarker best = null;
+            double bestDistSq = Double.MAX_VALUE;
+            for (UserMapMarker marker : playerMarkers) {
+                String name = marker.getName();
+                if (name == null || !name.toLowerCase().contains(needle)) continue;
+                double dx = marker.getX() - x, dz = marker.getZ() - z;
+                double distSq = dx * dx + dz * dz;
+                if (distSq < bestDistSq) {
+                    bestDistSq = distSq;
+                    best = marker;
+                }
+            }
+            if (best == null) return null;
+
+            int mx = (int) best.getX(), mz = (int) best.getZ();
+            return new Vector3i(mx, cg.getHeight(seed, mx, mz), mz);
+        } catch (Exception e) {
+            LOGGER.atWarning().log("NearbyLandmarks player-marker search failed for " + npcId
+                    + " (" + keyword + "): " + e);
+            return null;
+        }
+    }
+
+    /**
      * Nearest real place matching a free-text keyword the LLM extracted from
      * what the player actually asked for (see llm_client.py's GUIDE_TARGET
      * tag) - e.g. "temple", "desert", "cave", "ruins". Searches TWO real,
@@ -205,6 +292,12 @@ public final class NearbyLandmarks {
      * and there is no equivalent lightweight "nearest X ore" search
      * mechanism in this engine to hook into the way there is for zones and
      * prefabs.
+     *
+     * SeekLandmarkSensor checks closestPlayerMarkerPosition() (above) FIRST
+     * and only falls back to this method if the player has no matching map
+     * marker of their own - a player's own named pin is a precise,
+     * player-chosen destination, this is the fuzzy world-gen fallback for
+     * everything else.
      */
     public static Vector3i closestNamedPosition(String npcId, String keyword,
                                                  Ref<EntityStore> npcRef, Store<EntityStore> store) {

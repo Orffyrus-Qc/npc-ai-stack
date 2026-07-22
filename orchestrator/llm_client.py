@@ -209,7 +209,12 @@ a short keyword for what kind of place the player actually wants to find - e.g. 
 "water", "desert", "temple", "cave", "ruins", "forest". Extract this from what \
 they said even if you're not sure of the exact real place name; a rough keyword is \
 enough to search by. If they just said something generic like "take me somewhere \
-interesting" with no real destination in mind, use "GUIDE_TARGET: landmark".
+interesting" with no real destination in mind, use "GUIDE_TARGET: landmark". BUT \
+if the player refers to a SPECIFIC place by a name someone would have actually \
+given it - "home", "my base", "the mine", "Steve's fort" - rather than a general \
+category, use that exact name/phrase as the keyword instead of generalizing it \
+into a category word. They may have personally marked that exact spot, and a \
+made-up category guess would miss it entirely.
 - Also output a second tag, on its own line, judging how the player treated \
 YOU personally in THIS message only (not their history, not the world) - \
 "TONE: KIND", "TONE: RUDE", or "TONE: NEUTRAL". KIND means real warmth, \

@@ -3,6 +3,7 @@ package com.orffyrus.npcai;
 import com.hypixel.hytale.logger.HytaleLogger;
 
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -53,7 +54,17 @@ public final class GuideState {
          * replaces the old Java-side 9-word WATER_KEYWORDS substring match
          * (still used as a fallback if the model's GUIDE_TARGET is missing
          * or matches nothing) with the model's own understanding of what
-         * was actually requested. See Guiding's keyword field. */
+         * was actually requested. See Guiding's keyword field.
+         *
+         * Also checked FIRST against the requesting player's own real,
+         * native Hytale map markers (NearbyLandmarks.closestPlayerMarkerPosition,
+         * a player-placed/named pin on their in-game map - see that
+         * method's javadoc) before falling back to the zone/prefab search
+         * above - a player's own marker name is an exact, precise
+         * destination they chose themselves ("home", "the mine"), strictly
+         * better than a fuzzy match against Hytale's own internal asset
+         * names whenever one exists. Added 2026-07-22 ("lead player through
+         * the map to a precise location"). */
         NAMED
     }
 
@@ -84,7 +95,12 @@ public final class GuideState {
      * even one tick of "we're here" before follow resumed. */
     private static final long ARRIVAL_LINGER_MILLIS = 5_000;
 
-    /** keyword is only meaningful (non-null) when target == NAMED.
+    /** keyword is only meaningful (non-null) when target == NAMED. playerId
+     * is whoever's real chat/interaction triggered this guide (NOT
+     * necessarily this NPC's tamed owner - offer_guide isn't gated on
+     * companion status, see TalkToAIAction/PlayerChatToAIListener) - needed
+     * so a NAMED search can check THAT player's own map markers, not
+     * arbitrarily the owner's.
      * Not a record: lastDistanceSq/lastProgressMillis/arrivedAtMillis are
      * updated in place every tick by a live SeekLandmarkSensor without
      * disturbing target/keyword/startedAtMillis or clobbering the "don't
@@ -93,14 +109,16 @@ public final class GuideState {
     private static final class Guiding {
         final Target target;
         final String keyword;
+        final UUID playerId;
         final long startedAtMillis;
         volatile long lastProgressMillis;
         volatile double lastDistanceSq = Double.MAX_VALUE;
         volatile long arrivedAtMillis = 0;
 
-        Guiding(Target target, String keyword, long startedAtMillis) {
+        Guiding(Target target, String keyword, UUID playerId, long startedAtMillis) {
             this.target = target;
             this.keyword = keyword;
+            this.playerId = playerId;
             this.startedAtMillis = startedAtMillis;
             this.lastProgressMillis = startedAtMillis;
         }
@@ -111,11 +129,11 @@ public final class GuideState {
 
     private GuideState() { }
 
-    public static void startGuiding(String npcId, Target target) {
-        startGuiding(npcId, target, null);
+    public static void startGuiding(String npcId, UUID playerId, Target target) {
+        startGuiding(npcId, playerId, target, null);
     }
 
-    public static void startGuiding(String npcId, Target target, String keyword) {
+    public static void startGuiding(String npcId, UUID playerId, Target target, String keyword) {
         // If already guiding toward this same target (and keyword, for
         // NAMED), don't touch the start time - README notes "almost every
         // reply decides OFFER_GUIDE," so a player who keeps chatting
@@ -135,7 +153,7 @@ public final class GuideState {
         // from spoken dialogue text alone.
         LOGGER.atInfo().log(npcId + " started guiding (target=" + target
                 + (keyword != null ? ", keyword=" + keyword : "") + ")");
-        GUIDING.put(npcId, new Guiding(target, keyword, System.currentTimeMillis()));
+        GUIDING.put(npcId, new Guiding(target, keyword, playerId, System.currentTimeMillis()));
     }
 
     /**
@@ -153,14 +171,14 @@ public final class GuideState {
      * real destination in mind") falls back to the original NEAREST_LANDMARK
      * behavior - the pre-2026-07-22 default for every guide request.
      */
-    public static void startGuidingFromKeyword(String npcId, String keyword) {
+    public static void startGuidingFromKeyword(String npcId, UUID playerId, String keyword) {
         String normalized = keyword == null ? "" : keyword.trim().toLowerCase();
         if (normalized.isEmpty() || normalized.equals("landmark")) {
-            startGuiding(npcId, Target.NEAREST_LANDMARK);
+            startGuiding(npcId, playerId, Target.NEAREST_LANDMARK);
         } else if (normalized.equals("water")) {
-            startGuiding(npcId, Target.NEAREST_WATER);
+            startGuiding(npcId, playerId, Target.NEAREST_WATER);
         } else {
-            startGuiding(npcId, Target.NAMED, normalized);
+            startGuiding(npcId, playerId, Target.NAMED, normalized);
         }
     }
 
@@ -183,6 +201,13 @@ public final class GuideState {
     public static String getKeyword(String npcId) {
         Guiding g = GUIDING.get(npcId);
         return g != null ? g.keyword : null;
+    }
+
+    /** Whoever's chat/interaction started this guide - see Guiding's
+     * playerId javadoc for why this isn't necessarily the tamed owner. */
+    public static UUID getPlayerId(String npcId) {
+        Guiding g = GUIDING.get(npcId);
+        return g != null ? g.playerId : null;
     }
 
     /** Called every tick by SeekLandmarkSensor (while still en route, not

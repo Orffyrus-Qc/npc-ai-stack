@@ -13,6 +13,8 @@ import com.hypixel.hytale.server.npc.sensorinfo.PositionProvider;
 import org.joml.Vector3d;
 import org.joml.Vector3i;
 
+import java.util.UUID;
+
 /**
  * Runtime "SeekLandmark" sensor - true while GuideState.isGuiding(this NPC)
  * and NearbyLandmarks has a cached target for it, supplying that landmark's
@@ -88,7 +90,18 @@ public class SeekLandmarkSensor extends SensorBase {
             target = NearbyLandmarks.closestWaterPosition(npcId, ref, store);
         } else if (mode == GuideState.Target.NAMED) {
             String keyword = GuideState.getKeyword(npcId);
-            target = keyword != null ? NearbyLandmarks.closestNamedPosition(npcId, keyword, ref, store) : null;
+            UUID playerId = GuideState.getPlayerId(npcId);
+            // Check the requesting player's own real map markers FIRST - a
+            // precise, player-chosen destination ("home", "the mine") beats
+            // a fuzzy match against Hytale's own internal zone/prefab names
+            // whenever one exists. See NearbyLandmarks.
+            // closestPlayerMarkerPosition()'s javadoc. 2026-07-22, "lead
+            // player through the map to a precise location."
+            target = (keyword != null && playerId != null)
+                    ? NearbyLandmarks.closestPlayerMarkerPosition(npcId, keyword, playerId, ref, store) : null;
+            if (target == null && keyword != null) {
+                target = NearbyLandmarks.closestNamedPosition(npcId, keyword, ref, store);
+            }
             if (target == null) {
                 // 2026-07-22 real bug found live: every NAMED search in a
                 // real session failed ("keyword=flower", "keyword=wilderness"
