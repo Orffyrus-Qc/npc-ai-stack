@@ -61,6 +61,7 @@ from personality import PersonalityStore
 from priority_queue import NPCRequestDispatcher
 from skill_runtime import SkillRuntime
 from taming import TamingStore
+from threads import ThreadStore
 from wiki_ingest import run_ingest_cycle
 from wiki_knowledge import WikiKnowledgeStore
 
@@ -110,6 +111,7 @@ MEMORY = MemoryStore()
 PERSONALITY = PersonalityStore()
 TAMING = TamingStore()
 WIKI = WikiKnowledgeStore()
+THREADS = ThreadStore()
 SKILLS = SkillRuntime(Path(os.environ.get("SANDBOX_DIR", "/sandbox")))
 
 # How often wiki_refresh_daemon() re-crawls hytale.fandom.com - see that
@@ -176,6 +178,12 @@ async def _build_context(msg: dict) -> NPCContext:
 
     owner = await TAMING.get_owner(npc_id)
     is_companion = bool(player_id) and owner == player_id
+    # Not gated on real text/situation like memories/wiki_snippets above -
+    # this is a direct per-(npc,player) lookup, not a similarity search, so
+    # there's no "query" it needs. get_open_thread() itself applies the
+    # mention-cooldown/cap (see threads.py) that keeps this occasional
+    # rather than appearing on every single turn.
+    open_thread_hint = await THREADS.get_open_thread(npc_id, player_id) if player_id else None
     return NPCContext(
         npc_id=npc_id,
         name=msg.get("npc_name", npc_id),
@@ -186,6 +194,7 @@ async def _build_context(msg: dict) -> NPCContext:
         location_hint=msg.get("situation", ""),
         is_companion=is_companion,
         player_name=msg.get("player_name", ""),
+        open_thread_hint=open_thread_hint or "",
     )
 
 
@@ -197,12 +206,14 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
     )
     if isinstance(raw, DialogueResult):
         text, action, tone = raw.text, raw.action, raw.tone
+        thread_action, thread_summary = raw.thread_action, raw.thread_summary
     else:
         # The dispatcher fell back to its generic "..." string sentinel
         # (GPU busy / call timed out / call raised) instead of running
         # LLM.dialogue() - the NPC just visibly "pauses", no action decided,
         # and there's no real reply to judge tone from either.
         text, action, tone = raw, "none", "neutral"
+        thread_action, thread_summary = "none", ""
 
     if action == "accept_tame":
         player_id = msg.get("player_id", "")
@@ -254,6 +265,15 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
     if outcome and player_id:
         baseline = DEFAULT_BASELINES.get(msg.get("npc_role", ""), FALLBACK_BASELINE)
         _spawn(PERSONALITY.record_outcome(ctx.npc_id, player_id, outcome, baseline))
+
+    # Structured unresolved-conversation tracking (threads.py) - same
+    # zero-extra-call piggyback as TONE above, just a separate tag. "none"
+    # (the overwhelming majority of turns) does nothing on purpose, same
+    # reasoning as "neutral" tone above.
+    if player_id and thread_action == "open" and thread_summary:
+        _spawn(THREADS.open_thread(ctx.npc_id, player_id, thread_summary))
+    elif player_id and thread_action == "resolve":
+        _spawn(THREADS.resolve_thread(ctx.npc_id, player_id))
     # A reply that arrives too fast reads as unnaturally instant - real
     # conversation has a beat where the other person visibly thinks before
     # answering, and the plugin's "IsAwaitingReply" particle (see
@@ -465,6 +485,7 @@ async def main() -> None:
     await PERSONALITY.start()
     await TAMING.start()
     await WIKI.start()
+    await THREADS.start()
     _spawn(compression_daemon())
     _spawn(wiki_refresh_daemon())
     async with websockets.serve(plugin_connection, "0.0.0.0", 8765,

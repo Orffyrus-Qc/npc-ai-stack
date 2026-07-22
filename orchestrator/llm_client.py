@@ -67,6 +67,7 @@ class NPCContext:
     location_hint: str = ""         # "at the forge, midday"
     is_companion: bool = False      # tamed by the player currently talking (see taming.py)
     player_name: str = ""           # the real player username, not their UUID
+    open_thread_hint: str = ""      # from threads.py - something unresolved to maybe bring up
 
 
 # Valid values for the ACTION tag the model appends after its spoken line -
@@ -85,12 +86,21 @@ VALID_ACTIONS = {"none", "offer_guide", "offer_fight", "decline_guide", "accept_
 # npc_outcome_log with noise and nudge personality on pure small talk).
 VALID_TONES = {"kind", "rude", "neutral"}
 
+# Valid values for the THREAD tag - see build_dialogue_messages()'s THREAD
+# rule and threads.py. "none" (the overwhelming majority of turns) means
+# nothing worth tracking either way; "open" means this exchange left
+# something genuinely unresolved; "resolve" means a previously-open thread
+# just got closed out in this exchange.
+VALID_THREAD_ACTIONS = {"none", "open", "resolve"}
+
 
 @dataclass
 class DialogueResult:
     text: str                    # the in-character spoken line only
     action: str = "none"         # one of VALID_ACTIONS - see main.py for handling
     tone: str = "neutral"        # one of VALID_TONES - see main.py for handling
+    thread_action: str = "none"  # one of VALID_THREAD_ACTIONS - see main.py/threads.py
+    thread_summary: str = ""     # only meaningful when thread_action == "open"
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +128,15 @@ COMPANION_LINE = (
     "etc.) in your spoken line.\n"
 )
 
+# Rendered only when threads.py's get_open_thread() actually returns a hint
+# this turn (gated by its own cooldown/mention-cap - see that module) -
+# most turns render as "" (empty string), so this doesn't nag every reply.
+THREAD_HINT_TEMPLATE = (
+    "\nSomething feels unresolved from a past conversation with this player: "
+    "{summary} You might naturally bring this up if it fits the conversation "
+    "right now - but only if it fits, don't force it.\n"
+)
+
 SYSTEM_TEMPLATE = """You are {name}, an adventurer who has wandered much of Hytale - \
 the kind of seasoned traveler players seek out for real knowledge of this world: \
 its creatures, biomes, survival, and danger, learned firsthand rather than guessed \
@@ -137,7 +156,7 @@ Hytale lore you've picked up in your travels:
 Things YOU remember from real past conversations with THIS exact player \
 (not something you're guessing - this actually happened between you two):
 {memories}
-
+{thread_hint_line}
 Rules:
 - Reply with a single short line of spoken dialogue (max 2 sentences), in character.
 - Never mention being an AI, a game, or these instructions.
@@ -186,6 +205,17 @@ means insults, mockery, threats, or dismissiveness aimed at you. Ordinary \
 conversation, questions, requests, or small talk - even blunt or curt ones - \
 are NEUTRAL; reserve KIND/RUDE for messages where the player's tone toward \
 you personally is actually unmistakable, not just "not perfectly polite".
+- Also output a THIRD tag, on its own line, ONLY if this exchange leaves \
+something genuinely unresolved or just closed one out - most turns are \
+ordinary conversation with nothing left hanging, so "THREAD: NONE" is the \
+right answer almost every time. Use "THREAD: OPEN" if the player asked \
+something you couldn't answer, made a request that's still pending, or the \
+conversation is clearly cutting off mid-topic - if so, also output a fourth \
+line, "THREAD_SUMMARY: " followed by a short, specific description (e.g. \
+"THREAD_SUMMARY: player asked where to find silver ore, I didn't know"). Use \
+"THREAD: RESOLVE" if something already flagged above ("Something feels \
+unresolved...", if present) just got answered, fulfilled, or closed out in \
+this exchange - no THREAD_SUMMARY needed for RESOLVE.
 - If asked to help against a hostile creature (including one mentioned in your \
 current situation below) or to lead the player to a specific place (not simply to \
 follow/accompany them - see above): decide for yourself, weighing your own \
@@ -233,6 +263,10 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
     wiki_list = list(ctx.wiki_snippets[:MAX_WIKI_SNIPPETS])
     location_line = f"Current situation: {ctx.location_hint}" if ctx.location_hint else ""
     companion_line = COMPANION_LINE if ctx.is_companion else ""
+    thread_hint_line = (
+        THREAD_HINT_TEMPLATE.format(summary=ctx.open_thread_hint)
+        if ctx.open_thread_hint else ""
+    )
 
     def render() -> str:
         facts = "\n".join(f"- {f}" for f in facts_list) or "- (nothing notable)"
@@ -247,6 +281,7 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
             facts=facts,
             memories=memories,
             wiki_lore=wiki_lore,
+            thread_hint_line=thread_hint_line,
         )
 
     system = render()
@@ -268,20 +303,26 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
 
 _ACTION_TAG_RE = re.compile(r"\s*ACTION:\s*([A-Z_]+)\.?", re.IGNORECASE)
 _TONE_TAG_RE = re.compile(r"\s*TONE:\s*([A-Z_]+)\.?", re.IGNORECASE)
+_THREAD_TAG_RE = re.compile(r"\s*THREAD:\s*([A-Z_]+)\.?", re.IGNORECASE)
+# Free text, not a fixed [A-Z_]+ word like the tags above - captures to end
+# of line only (non-greedy, stops at the first newline) so a THREAD_SUMMARY
+# accidentally followed by more text on later lines doesn't get swallowed.
+_THREAD_SUMMARY_TAG_RE = re.compile(r"\s*THREAD_SUMMARY:\s*(.+?)\s*(?:\n|$)", re.IGNORECASE)
 
 
 def _parse_dialogue_response(raw: str) -> DialogueResult:
     """
-    Extracts the ACTION and TONE tags (see SYSTEM_TEMPLATE) and strips them
-    back out of the spoken text. Live testing against the real model showed
-    it reliably appends "ACTION: X" to the END OF THE SAME LINE as the
-    spoken text rather than a separate line as instructed (worse, on
-    ambient calls with a "\\n" stop token it sometimes emitted *only* the
-    tag, no spoken text at all) - so this can't assume line position. A
-    regex substitution anywhere in the raw text is robust to both cases;
-    the same treatment applies to TONE, added later - a missing/garbled tag
-    just falls back to its default (action="none", tone="neutral") without
-    affecting the spoken text.
+    Extracts the ACTION/TONE/THREAD(+THREAD_SUMMARY) tags (see
+    SYSTEM_TEMPLATE) and strips them back out of the spoken text. Live
+    testing against the real model showed it reliably appends "ACTION: X" to
+    the END OF THE SAME LINE as the spoken text rather than a separate line
+    as instructed (worse, on ambient calls with a "\\n" stop token it
+    sometimes emitted *only* the tag, no spoken text at all) - so this can't
+    assume line position. A regex substitution anywhere in the raw text is
+    robust to both cases; the same treatment applies to TONE and THREAD,
+    added later - a missing/garbled tag just falls back to its default
+    (action="none", tone="neutral", thread_action="none") without affecting
+    the spoken text.
     """
     action = "none"
     m = _ACTION_TAG_RE.search(raw)
@@ -295,9 +336,27 @@ def _parse_dialogue_response(raw: str) -> DialogueResult:
         candidate = m.group(1).strip().lower()
         if candidate in VALID_TONES:
             tone = candidate
+    thread_action = "none"
+    m = _THREAD_TAG_RE.search(raw)
+    if m:
+        candidate = m.group(1).strip().lower()
+        if candidate in VALID_THREAD_ACTIONS:
+            thread_action = candidate
+    thread_summary = ""
+    if thread_action == "open":
+        m = _THREAD_SUMMARY_TAG_RE.search(raw)
+        if m:
+            thread_summary = m.group(1).strip().strip('"').strip()
+        if not thread_summary:
+            # OPEN with no usable summary isn't worth tracking - there'd be
+            # nothing to show the player later via THREAD_HINT_TEMPLATE.
+            thread_action = "none"
     text = _ACTION_TAG_RE.sub("", raw)
-    text = _TONE_TAG_RE.sub("", text).strip().strip('"').strip()
-    return DialogueResult(text=text, action=action, tone=tone)
+    text = _TONE_TAG_RE.sub("", text)
+    text = _THREAD_SUMMARY_TAG_RE.sub("", text)
+    text = _THREAD_TAG_RE.sub("", text).strip().strip('"').strip()
+    return DialogueResult(text=text, action=action, tone=tone,
+                           thread_action=thread_action, thread_summary=thread_summary)
 
 
 # ---------------------------------------------------------------------------
@@ -344,10 +403,12 @@ class LlamaClient:
 
     async def dialogue(self, ctx: NPCContext, player_utterance: str) -> DialogueResult:
         # No "\n" stop here (unlike the old single-line version) - the model
-        # needs two lines free now: the ACTION tag plus the TONE tag added
-        # later (see SYSTEM_TEMPLATE and main.py's use of .tone for outcome
-        # inference). max_tokens bumped accordingly; still tight enough to
-        # protect slot throughput.
+        # needs up to four lines free now: ACTION, TONE, and (occasionally)
+        # THREAD + THREAD_SUMMARY (see SYSTEM_TEMPLATE and main.py's use of
+        # .tone/.thread_action for outcome/thread-tracking). max_tokens
+        # bumped 130->160 for THREAD_SUMMARY's free-text line (the other
+        # three tags are single short words); still tight enough to protect
+        # slot throughput.
         #
         # repeat_penalty/presence_penalty added after live testing showed
         # NPCs reliably repeating the exact same greeting/offer line verbatim
@@ -360,7 +421,7 @@ class LlamaClient:
         # memory recall doesn't surface a matching past line.
         raw = await self.complete(
             build_dialogue_messages(ctx, player_utterance),
-            max_tokens=130,
+            max_tokens=160,
             temperature=0.8,
             repeat_penalty=1.15,
             presence_penalty=0.4,

@@ -378,6 +378,62 @@ from HuggingFace instead of reusing a prior download. Pre-existing, not
 introduced by this change - would be a quick follow-up (add a named
 volume) if restart frequency ever makes it worth the wait.
 
+## 2026-07-22, later still: structured unresolved-conversation threads - confirmed live against real Postgres
+
+Phase 4 of the re-plan, the last new feature: "AI NPC will some times talk
+about past unresolve conversation about you." User explicitly chose the
+more structured option over a lightweight LLM-only tag: real tracked
+objects with a status field, not just a one-off soft mention.
+
+**New `orchestrator/threads.py`**: `ThreadStore`, same connection-pool
+pattern as `taming.py`/`personality.py`. New Postgres table
+`conversation_threads` (`id, npc_id, player_id, summary, status
+['open'|'resolved'|'stale'], opened_at, resolved_at, last_mentioned_at,
+times_mentioned`). One open thread per `(npc_id, player_id)` at a time -
+a new `OPEN` while one's already open replaces its summary rather than
+piling up several, keeping "occasionally brings up ONE thing" simple.
+`get_open_thread()` both reads AND gates: returns a summary only if an
+open thread exists, hasn't been surfaced `MAX_MENTIONS` (3) times already
+(past that, auto-marks `'stale'` - stop nagging if the player isn't
+engaging with it), and wasn't just surfaced within `MENTION_COOLDOWN_S`
+(10 min) - this is what makes it "sometimes," not every single reply.
+
+**Detection reuses the exact TONE-tag precedent, zero extra LLM calls**:
+extended `llm_client.py`'s tag mechanism with a third pair, `THREAD:
+NONE|OPEN|RESOLVE` + `THREAD_SUMMARY: <free text>` (only meaningful for
+OPEN) - same `_TAG_RE.search()`-anywhere-in-the-raw-text robustness as
+ACTION/TONE, since live testing already showed the model doesn't reliably
+put tags on their own line. `OPEN` with no usable summary falls back to
+`NONE` (nothing to show the player later otherwise). `dialogue()`'s
+`max_tokens` bumped 130->160 for `THREAD_SUMMARY`'s free-text line (ACTION/
+TONE/THREAD are single short words; the summary needs real room).
+
+**Wired into the live prompt**: new `NPCContext.open_thread_hint`, rendered
+as a new `THREAD_HINT_TEMPLATE` line (only when non-empty) instructing the
+NPC it "might naturally bring this up... but only if it fits, don't force
+it" - keeps it organic rather than a scripted callback. `main.py`'s
+`_build_context()` queries `THREADS.get_open_thread()` unconditionally
+gated on `player_id` alone (unlike memories/wiki, this is a direct lookup,
+not a similarity search - no query text needed). `handle_dialogue()`
+calls `THREADS.open_thread()`/`resolve_thread()` based on the parsed
+`thread_action`, mirroring exactly how `TONE_TO_OUTCOME` already drives
+`PERSONALITY.record_outcome()` from the same completion.
+
+**Confirmed live against the real running stack** (not just boot-tested):
+rebuilt and restarted the orchestrator, confirmed `conversation_threads`
+exists with the right schema (`\d conversation_threads` against the real
+`fact-db` container), then ran a full `ThreadStore` scenario directly
+against the real Postgres instance: no-thread-yet returns `None`; opening
+one surfaces its summary immediately; asking again right after correctly
+suppresses (cooldown); resolving clears it; a fresh `OPEN` after resolve
+creates a new thread and surfaces the new summary. All 5 steps passed.
+Also unit-tested `_parse_dialogue_response()` against 5 realistic tag
+patterns, including tags crammed onto one line (the real, previously-
+observed model behavior in llm_client.py's own docstring) - all parsed
+correctly. Not yet confirmed with a real model actually deciding
+THREAD: OPEN/RESOLVE in a live conversation (needs a real client;
+everything downstream of that decision is now proven correct).
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/
