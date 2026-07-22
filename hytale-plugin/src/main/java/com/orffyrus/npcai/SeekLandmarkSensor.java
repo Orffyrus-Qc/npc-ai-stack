@@ -26,10 +26,11 @@ import org.joml.Vector3i;
  * itself, and to expose setTarget(double,double,double)) is reused directly
  * as this sensor's own getSensorInfo() - no separate wrapper needed.
  *
- * Auto-stops guiding (returns false, clears GuideState) once the NPC is
- * within ARRIVED_DISTANCE of the target, or if NearbyLandmarks never found
- * anything to guide to in the first place - so a stale/impossible guide
- * request doesn't leave the NPC "stuck" trying forever.
+ * Auto-stops guiding (returns false, clears GuideState) once the NPC has
+ * lingered at the target for GuideState.ARRIVAL_LINGER_MILLIS (see below),
+ * or if NearbyLandmarks never found anything to guide to in the first
+ * place - so a stale/impossible guide request doesn't leave the NPC "stuck"
+ * trying forever.
  */
 public class SeekLandmarkSensor extends SensorBase {
 
@@ -52,16 +53,36 @@ public class SeekLandmarkSensor extends SensorBase {
         if (mode == null) {
             return false;
         }
-        if (GuideState.hasTimedOut(npcId)) {
-            // Guide has no Continue in Watching's Instructions, so it takes
-            // full priority over companion-follow until this returns false -
-            // without this check, an unreachable/very-far/repeatedly-
-            // re-requested target would leave the NPC beelining toward a
-            // fixed point forever instead of ever following the player again.
-            LOGGER.atInfo().log(npcId + " gave up guiding (target=" + mode + ") after taking too long");
+
+        TransformComponent tc = store.getComponent(ref, TransformComponent.getComponentType());
+        if (tc == null) {
+            return false;
+        }
+        Vector3d pos = tc.getPosition();
+
+        if (GuideState.hasArrived(npcId)) {
+            // Already reached the landmark on an earlier tick - don't
+            // re-search for the target or recompute distance at all, just
+            // stand here (own current position, so "Seek" is a no-op) until
+            // the linger window (GuideState.ARRIVAL_LINGER_MILLIS) elapses.
+            // 2026-07-22 real bug found live ("npc begin to lead but return
+            // to his following duty"): this used to stopGuiding()
+            // immediately on arrival, in the SAME tick companion-follow
+            // would then take over (no Continue on either tier's
+            // Instructions nodes) - a short/nearby guide (confirmed via the
+            // real server log: both real guide requests that session
+            // arrived in 4-5 real seconds) read as "began to lead but
+            // immediately went back to following me," since the player
+            // never got even a moment of "we're here" first.
+            if (GuideState.isLingering(npcId)) {
+                positionProvider.setTarget(pos.x, pos.y, pos.z);
+                return true;
+            }
+            LOGGER.atInfo().log(npcId + " done showing the player the landmark, resuming normal behavior");
             GuideState.stopGuiding(npcId);
             return false;
         }
+
         Vector3i target;
         if (mode == GuideState.Target.NEAREST_WATER) {
             target = NearbyLandmarks.closestWaterPosition(npcId, ref, store);
@@ -92,16 +113,26 @@ public class SeekLandmarkSensor extends SensorBase {
             return false;
         }
 
-        TransformComponent tc = store.getComponent(ref, TransformComponent.getComponentType());
-        if (tc == null) {
-            return false;
-        }
-        Vector3d pos = tc.getPosition();
         double dx = target.x - pos.x, dz = target.z - pos.z;
-        if (Math.sqrt(dx * dx + dz * dz) < ARRIVED_DISTANCE) {
-            LOGGER.atInfo().log(npcId + " arrived at the landmark it was guiding toward");
+        double distanceSq = dx * dx + dz * dz;
+
+        // Reset the give-up clock whenever real progress happens - see
+        // GuideState.MAX_STUCK_MILLIS's javadoc for why a flat
+        // elapsed-since-start timeout wrongly penalized legitimate
+        // waiting/fleeing pauses (and long-but-real walks) the same as
+        // being genuinely stuck.
+        GuideState.recordProgress(npcId, distanceSq);
+        if (GuideState.hasTimedOut(npcId)) {
+            LOGGER.atInfo().log(npcId + " gave up guiding (target=" + mode + ") - no progress for too long");
             GuideState.stopGuiding(npcId);
             return false;
+        }
+
+        if (Math.sqrt(distanceSq) < ARRIVED_DISTANCE) {
+            LOGGER.atInfo().log(npcId + " arrived at the landmark it was guiding toward - pausing here a moment");
+            GuideState.markArrived(npcId);
+            positionProvider.setTarget(pos.x, pos.y, pos.z);
+            return true;
         }
 
         positionProvider.setTarget((double) target.x, (double) target.y, (double) target.z);

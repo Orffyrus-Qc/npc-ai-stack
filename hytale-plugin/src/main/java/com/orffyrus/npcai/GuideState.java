@@ -11,11 +11,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * carries action="offer_guide" (the NPC's own in-character decision - see
  * llm_client.py's SYSTEM_TEMPLATE rules). Read every tick by
  * SeekLandmarkSensor, which also clears this automatically once the NPC
- * arrives - see that class's javadoc.
+ * arrives and finishes lingering there - see that class's javadoc.
  *
  * This is persistent while active, same shape as CompanionState - it stays
- * set across many ticks until the NPC arrives (or a caller explicitly
- * stops it).
+ * set across many ticks until the NPC arrives + finishes lingering (or a
+ * caller explicitly stops it).
  *
  * Guide takes priority over companion-follow in every role's Watching
  * Instructions (no Continue on the guide node) - live testing showed that
@@ -26,7 +26,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * player, which from the player's side looks exactly like "he stopped
  * following me after I talked to him." hasTimedOut() is the safety net for
  * that: SeekLandmarkSensor checks it every tick and gives up regardless of
- * why arrival never happened.
+ * why arrival never happened. See MAX_STUCK_MILLIS's javadoc for why this
+ * is a no-progress timeout, not a flat one, and ARRIVAL_LINGER_MILLIS's
+ * javadoc for the separate "don't instantly resume following the moment
+ * you arrive" fix - both from the same 2026-07-22 live report ("npc begin
+ * to lead but return to his following duty").
  */
 public final class GuideState {
 
@@ -49,16 +53,58 @@ public final class GuideState {
          * replaces the old Java-side 9-word WATER_KEYWORDS substring match
          * (still used as a fallback if the model's GUIDE_TARGET is missing
          * or matches nothing) with the model's own understanding of what
-         * was actually requested. See Guiding record's keyword field. */
+         * was actually requested. See Guiding's keyword field. */
         NAMED
     }
 
     /** Give up and resume normal behavior (companion-follow, if applicable)
-     * after this long without arriving - see the class javadoc. */
-    private static final long MAX_GUIDE_MILLIS = 25_000;
+     * once this long has passed with NO real progress toward the target -
+     * not a flat clock from when guiding started (the original 25s version
+     * of this constant). A flat from-start clock counted time spent
+     * legitimately paused - waiting for a lagging owner (see the "wait for
+     * the player" node in the role JSONs), fleeing a nearby hostile - against
+     * the exact same budget as actual walking, so any real guide request
+     * that included even one such pause, or simply led somewhere more than
+     * a couple hundred blocks away, blew through the timeout and reverted
+     * to following before ever arriving. recordProgress()/hasTimedOut()
+     * below track "closest distance reached so far" instead, so a guide
+     * that's slowly-but-genuinely getting closer never times out no matter
+     * how long it takes, while one that's truly stuck (unreachable,
+     * bouncing off terrain) still gives up. */
+    private static final long MAX_STUCK_MILLIS = 60_000;
 
-    /** keyword is only meaningful (non-null) when target == NAMED. */
-    private record Guiding(Target target, String keyword, long startedAtMillis) { }
+    /** Once arrived, stand at the landmark this long before resuming normal
+     * behavior (companion-follow) - see markArrived()/isLingering(). Without
+     * this, arrival and resuming "seek toward owner" happened in the exact
+     * same tick (no Continue on either the guide-tier or follow-tier
+     * Instructions nodes), so a short guide read as "began to lead but
+     * immediately went back to following me" - live-reported 2026-07-22,
+     * confirmed via the real server log: both real guide requests that
+     * session arrived within 4-5 real seconds, meaning the player never got
+     * even one tick of "we're here" before follow resumed. */
+    private static final long ARRIVAL_LINGER_MILLIS = 5_000;
+
+    /** keyword is only meaningful (non-null) when target == NAMED.
+     * Not a record: lastDistanceSq/lastProgressMillis/arrivedAtMillis are
+     * updated in place every tick by a live SeekLandmarkSensor without
+     * disturbing target/keyword/startedAtMillis or clobbering the "don't
+     * reset if already guiding toward this same target" dedupe in
+     * startGuiding() below. */
+    private static final class Guiding {
+        final Target target;
+        final String keyword;
+        final long startedAtMillis;
+        volatile long lastProgressMillis;
+        volatile double lastDistanceSq = Double.MAX_VALUE;
+        volatile long arrivedAtMillis = 0;
+
+        Guiding(Target target, String keyword, long startedAtMillis) {
+            this.target = target;
+            this.keyword = keyword;
+            this.startedAtMillis = startedAtMillis;
+            this.lastProgressMillis = startedAtMillis;
+        }
+    }
 
     private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
     private static final ConcurrentHashMap<String, Guiding> GUIDING = new ConcurrentHashMap<>();
@@ -80,7 +126,7 @@ public final class GuideState {
         // instead of only once). A genuinely different target/keyword still
         // gets a fresh window, same as starting from not-guiding at all.
         Guiding existing = GUIDING.get(npcId);
-        if (existing != null && existing.target() == target && Objects.equals(existing.keyword(), keyword)) {
+        if (existing != null && existing.target == target && Objects.equals(existing.keyword, keyword)) {
             return;
         }
         // Logged unconditionally (not just on a mode change) so a live test
@@ -129,21 +175,64 @@ public final class GuideState {
     /** The active guide mode for this NPC, or null if not currently guiding. */
     public static Target getTarget(String npcId) {
         Guiding g = GUIDING.get(npcId);
-        return g != null ? g.target() : null;
+        return g != null ? g.target : null;
     }
 
     /** The active guide's keyword (only meaningful when getTarget() ==
      * NAMED), or null. */
     public static String getKeyword(String npcId) {
         Guiding g = GUIDING.get(npcId);
-        return g != null ? g.keyword() : null;
+        return g != null ? g.keyword : null;
     }
 
-    /** True once this NPC has been guiding longer than MAX_GUIDE_MILLIS
-     * without arriving - SeekLandmarkSensor should give up regardless of
-     * the reason (unreachable, too far, re-requested repeatedly). */
+    /** Called every tick by SeekLandmarkSensor (while still en route, not
+     * yet arrived) with the current squared 2D distance to the guide
+     * target. Resets the no-progress clock whenever this tick's distance is
+     * a real improvement over the closest distance seen so far - see
+     * MAX_STUCK_MILLIS's javadoc for why a flat from-start clock was wrong.
+     * No-op if this NPC isn't currently guiding. */
+    public static void recordProgress(String npcId, double distanceSq) {
+        Guiding g = GUIDING.get(npcId);
+        if (g != null && distanceSq < g.lastDistanceSq) {
+            g.lastDistanceSq = distanceSq;
+            g.lastProgressMillis = System.currentTimeMillis();
+        }
+    }
+
+    /** True once this NPC has gone MAX_STUCK_MILLIS without getting any
+     * closer to its guide target - SeekLandmarkSensor should give up
+     * regardless of the reason (unreachable, too far off the beaten path,
+     * re-requested repeatedly). */
     public static boolean hasTimedOut(String npcId) {
         Guiding g = GUIDING.get(npcId);
-        return g != null && (System.currentTimeMillis() - g.startedAtMillis()) > MAX_GUIDE_MILLIS;
+        return g != null && (System.currentTimeMillis() - g.lastProgressMillis) > MAX_STUCK_MILLIS;
+    }
+
+    /** Marks the moment this NPC reached its guide target - see
+     * isLingering()/ARRIVAL_LINGER_MILLIS. Idempotent: only the first call
+     * after a fresh startGuiding() actually sets the timestamp. */
+    public static void markArrived(String npcId) {
+        Guiding g = GUIDING.get(npcId);
+        if (g != null && g.arrivedAtMillis == 0) {
+            g.arrivedAtMillis = System.currentTimeMillis();
+        }
+    }
+
+    /** True once markArrived() has been called for this NPC (regardless of
+     * whether the linger window is still open) - lets SeekLandmarkSensor
+     * tell "still traveling" apart from "arrived (lingering or done)"
+     * without recomputing/re-searching for the target again post-arrival. */
+    public static boolean hasArrived(String npcId) {
+        Guiding g = GUIDING.get(npcId);
+        return g != null && g.arrivedAtMillis != 0;
+    }
+
+    /** True for ARRIVAL_LINGER_MILLIS after markArrived() - see that
+     * constant's javadoc for why this exists. Only meaningful once
+     * hasArrived() is true. */
+    public static boolean isLingering(String npcId) {
+        Guiding g = GUIDING.get(npcId);
+        return g != null && g.arrivedAtMillis != 0
+                && (System.currentTimeMillis() - g.arrivedAtMillis) < ARRIVAL_LINGER_MILLIS;
     }
 }

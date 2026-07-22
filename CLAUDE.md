@@ -922,6 +922,78 @@ in a real chat bubble, does the guide/wait/flee JSON behavior tree
 actually look right in motion) genuinely needs the user's own play
 session.
 
+## 2026-07-22, later still: "npc begin to lead but return to his following duty" - two real timing bugs in GuideState
+
+First real in-game report on the guide feature: "npc begin to lead but
+return to his following duty, npc must not follow when he lead." Checked
+the real, currently-running session's server log
+(`Saves/09/logs/2026-07-22_10-38-33_server.log`, the live game - confirmed
+via `Get-CimInstance Win32_Process` that PID 18232 is the actual
+HytaleServer.jar process, not the Gradle daemon) before guessing:
+
+```
+[GuideState] Adventurer started guiding (target=NAMED, keyword=town)
+[SeekLandmarkSensor] Adventurer arrived at the landmark it was guiding toward
+```
+
+Both real guide requests that session (`town`, `desert`) arrived within
+4-5 real seconds and logged as a clean "arrived," not a timeout - so the
+report wasn't about giving up early on a specific request, it was about
+what happens the instant arrival fires.
+
+**Bug 1 - instant snap back to following.** `SeekLandmarkSensor` used to
+call `GuideState.stopGuiding()` the same tick distance-to-target dropped
+under `ARRIVED_DISTANCE` and return `false` immediately. Neither the guide
+tier nor the companion-follow tier in the role JSON has `Continue: true`,
+so the very next node evaluated in that identical tick was
+companion-follow (`IsCompanion` + owner nearby) - the NPC never got a
+single tick of standing at the destination. For a short/nearby guide (like
+both of this session's real requests) this reads exactly as "began to lead
+but immediately went back to following me," because from the player's
+side there was no visible arrival moment at all, just leading-then-
+following back-to-back. Fixed by adding an arrival "linger": `GuideState`
+now tracks `arrivedAtMillis` and `isLingering()` (5s window,
+`ARRIVAL_LINGER_MILLIS`); `SeekLandmarkSensor` keeps matching (and keeps
+winning priority over follow) during that window, feeding its own current
+position into the `Seek` BodyMotion (a no-op stand-still) instead of
+clearing guide state outright. Only after the linger window elapses does
+it call `stopGuiding()` and fall through to normal follow. Zero JSON
+changes needed - the existing `SeekLandmark` → `Seek` node already handles
+"stand at my own position" correctly once fed that target.
+
+**Bug 2 - the give-up timeout was still a real latent problem for
+anything farther away.** While tracing this, re-examined
+`GuideState.hasTimedOut()`: it was a flat 25-second clock from when
+guiding started (`MAX_GUIDE_MILLIS`), which counted time spent legitimately
+paused - the "wait for the player" node (`BodyMotion: Nothing` while the
+owner catches up) and the "flee" node both leave `SeekLandmark` matching
+the whole time, so their pause time silently ate into the same 25s budget
+as actual walking. At `RelativeSpeed: 1` (~8 blocks/s) that's only ~200
+blocks of pure walking before timing out even with zero pauses - anything
+farther (the `NAMED` search radius is 2000 blocks) or any real guide that
+included even one wait/flee detour would blow through it and revert to
+following before arriving. Not yet caught live (both real requests this
+session happened to be close by), but it's the same class of bug as #1 -
+"guide reverts to follow earlier than it should" - and was clearly wrong
+by inspection, not a guess: a flat clock has no way to distinguish
+"genuinely stuck" from "far away but steadily getting closer" or
+"paused for a good reason." Replaced with a no-progress timeout:
+`GuideState.recordProgress(npcId, distanceSq)` is called every tick with
+the current squared distance to target, and only resets `hasTimedOut()`'s
+clock when that distance actually improves; `MAX_STUCK_MILLIS` (60s of
+zero improvement) still catches a truly unreachable/stuck target, but a
+long-but-real walk, or one interrupted by legitimate waits/flees, never
+times out just for taking a while.
+
+Both fixes live entirely in `GuideState.java`/`SeekLandmarkSensor.java` -
+no JSON changes, since the existing guide-tier/follow-tier priority
+ordering in the role JSON was already correct (confirmed by re-reading it
+node by node); the bug was purely in when `SeekLandmark` stopped matching,
+not in which node won when it did. Boot-tested (`./gradlew build` clean)
+and installed to the Mods folder; genuinely needs the user's own next play
+session to confirm the "arrive and pause" moment feels right and that a
+longer/farther guide request no longer reverts early.
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/

@@ -1,5 +1,48 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: "npc begin to lead but return to his following duty" - two real timing bugs
+
+First real in-game report on the guide feature. Checked the actual running
+session's server log first (confirmed via `Get-CimInstance
+Win32_Process` that the game server, not just the Gradle daemon, was the
+process that mattered here) - both real guide requests that session
+(`town`, `desert`) logged a clean "arrived" within 4-5 real seconds, no
+timeout. So the bug wasn't a specific request giving up early - it was
+what happens the instant arrival fires.
+
+**Instant snap back to following.** `SeekLandmarkSensor` used to clear
+guide state and stop matching the SAME tick it detected arrival - since
+neither the guide tier nor companion-follow has `Continue` in the role
+JSON, the very next node evaluated that tick was follow-the-owner. For a
+short/nearby guide this reads as "began to lead but immediately went back
+to following me" - there was never a visible arrival moment, just leading
+then following back-to-back. Fixed with a 5-second arrival "linger":
+`GuideState` keeps guiding active and `SeekLandmarkSensor` keeps winning
+priority over follow for that window, feeding its own current position
+into the existing `Seek` BodyMotion (a no-op stand-still) - only once the
+window elapses does it actually stop and hand back to follow. No JSON
+changes needed.
+
+**Give-up timeout was a flat 25s clock from start**, which kept ticking
+down during legitimate pauses (the wait-for-player node, the flee node
+both leave the guide tier matching while paused) as well as during real
+walking - at normal speed that's only ~200 blocks before timing out with
+zero pauses, well under the 2000-block search radius a NAMED destination
+can be found at. Not yet caught live this session (both real requests
+were close by) but clearly wrong by inspection - a flat clock can't tell
+"stuck" apart from "far away but steadily getting closer." Replaced with
+a no-progress timeout (60s of zero improvement in distance-to-target,
+tracked every tick), so a long-but-real walk or one interrupted by
+waiting/fleeing no longer times out just for taking a while.
+
+Both fixes live entirely in `GuideState.java`/`SeekLandmarkSensor.java` -
+the existing guide-tier/follow-tier priority ordering in the role JSON
+was already correct on re-inspection; the bug was in *when* `SeekLandmark`
+stopped matching, not in which node won once it did. Boot-tested clean,
+jar rebuilt and reinstalled. Still needs the user's own next play session
+to confirm the arrival pause feels right and a farther guide request
+doesn't revert early.
+
 ## 2026-07-22, later still: "npc stopped working" - two real bugs found in the actual session log
 
 Investigated "npc stopped working" by pulling the real server log first
