@@ -96,6 +96,18 @@ public class TalkToAIAction extends ActionBase {
         // is closest can still change as the NPC/player do) - same
         // not-cached-on-Conversation treatment as threat, above.
         String nearbyObjects = NearbyObjects.describe(npcId);
+        if (nearbyObjects.isEmpty()) {
+            // 2026-07-22, "if it not enough precise he will take the item
+            // or group of item i am pointing at": the NPC's own ambient
+            // look-around found nothing notable - fall back to a real
+            // raycast along THIS player's actual look direction (see
+            // PlayerPointing's javadoc). Only resolvable here (conversation
+            // start) - see that class's javadoc for why.
+            String pointedAt = PlayerPointing.findPointedAtNotableBlock(playerUuid, ref, store);
+            if (pointedAt != null) {
+                nearbyObjects = "You notice the player is specifically looking at a " + pointedAt + ".";
+            }
+        }
         if (!nearbyObjects.isEmpty()) {
             fullSituation += " " + nearbyObjects;
         }

@@ -72,4 +72,15 @@ public final class NearbyObjects {
         return "You can see a " + s.blockId() + " on the ground nearby (~"
                 + Math.round(s.distance()) + " blocks away).";
     }
+
+    /** Real, shipped block-id substring filter - matches the actual
+     * naming convention confirmed in Server/BlockTypeList/
+     * PlantsAndTrees.json (e.g. "Plant_Flower_Common_Blue"). Shared
+     * between NoteNearbyObjectsAction's ambient scan and PlayerPointing's
+     * raycast fallback so "notable" means the same thing regardless of
+     * which one found it. */
+    public static boolean isNotableBlockId(String blockId) {
+        String lower = blockId.toLowerCase();
+        return lower.contains("flower") || lower.contains("plant") || lower.contains("mushroom");
+    }
 }

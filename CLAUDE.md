@@ -2134,6 +2134,61 @@ own play session to confirm end-to-end - what's verified here is the
 prompt/parsing side via a synthetic situation string matching the real
 output shape.
 
+## 2026-07-22, later still: player-pointing fallback for environment sensing - "if it not enough precise, take what I'm pointing at"
+
+Extended the environment-sensing feature per the user's refinement:
+"when I ask about map items the npc must look around him and if it not
+enough precise he will take the item or group of item i am pointing at."
+Design: keep the existing NPC-centered ambient scan
+(NearbyObjects/NoteNearbyObjectsAction) as the primary "look around him"
+signal; when that finds nothing notable, fall back to a real raycast
+along the REQUESTING PLAYER's own actual look direction.
+
+**Dead end found and abandoned quickly, not guessed around**: the real,
+shipped `RaycastSelector.selectTargetPosition()` - the game's own
+interaction/reticle-targeting mechanism, the obvious first candidate to
+reuse - needs a `CommandBuffer<EntityStore>`, and
+`Store.takeCommandBuffer()` is package-private. Same unreachable-package
+problem as `PrefabSearchUtil` from the earlier map-search work. Moved on
+to building a direct raycast instead of fighting that.
+
+**Real look-direction math, reverse-derived from disassembly, not
+guessed**: read the actual bytecode of the real, shipped
+`Rotation3f.lookAt(Vector3d)` (which computes a ROTATION *from* a
+direction vector: `yaw = atan2(-dx, -dz)`, `pitch = asin(dy / length)`)
+and inverted it algebraically to get a direction vector *from* a
+rotation: `dx = -sin(yaw)*cos(pitch)`, `dz = -cos(yaw)*cos(pitch)`,
+`dy = sin(pitch)`. `TransformComponent.getRotation()` (the SAME component
+already used for position) gives any player's real, live rotation - no
+separate component lookup needed.
+
+**New `PlayerPointing.findPointedAtNotableBlock()`**: steps along that
+direction from an approximate eye position (feet + 1.5 blocks, not a
+confirmed exact constant) in 0.25-block increments up to 6 blocks,
+checking `World.getBlockType()` (the same mechanism
+`NoteNearbyObjectsAction` already uses) at each step for a notable block
+(`NearbyObjects.isNotableBlockId()`, now shared between both paths
+rather than duplicated). Not a precise solid-block hit-test raycast -
+sufficient for "roughly what direction is the player looking," which is
+all this needs.
+
+**Real scoping limitation, not an oversight**: only resolvable at
+conversation-START (`TalkToAIAction` has both ECS access and the specific
+requesting player's identity together; `PlayerChatToAIListener`'s ongoing
+chat turns have neither - the same constraint `NearbyLandmarks`' static
+candidate data already lives with). If the player starts pointing at
+something only mid-conversation, this won't be picked up until they
+start a fresh conversation.
+
+Boot-tested clean (compiles - confirms the `Rotation3f`/`getBlockType`
+APIs are valid; registration log unchanged since no new action type was
+added, just a new plain utility class), jar rebuilt/reinstalled. No
+orchestrator changes needed - this only produces a situation-text
+fragment shaped identically to the existing ambient-scan one, so the
+same prompt instruction already covers it. Genuinely cannot verify the
+eye-height/direction math is exactly right without a live player actually
+pointing at a real flower - that needs the user's own play session.
+
 ## Tuning table
 
 See README.md — it maps symptoms (slow dialogue, world stutter, OOM) to the

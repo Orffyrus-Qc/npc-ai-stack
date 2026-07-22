@@ -89,7 +89,7 @@ public class NoteNearbyObjectsAction extends ActionBase {
                         BlockType type = world.getBlockType(cx + dx, cy + dy, cz + dz);
                         if (type == null) continue;
                         String id = type.getId();
-                        if (id == null || !isNotable(id)) continue;
+                        if (id == null || !NearbyObjects.isNotableBlockId(id)) continue;
                         double distSq = (double) dx * dx + (double) dy * dy + (double) dz * dz;
                         if (distSq < bestDistSq) {
                             bestDistSq = distSq;
@@ -106,16 +106,5 @@ public class NoteNearbyObjectsAction extends ActionBase {
             LOGGER.atWarning().log("NoteNearbyObjects scan failed for " + npcId + ": " + e);
         }
         return true;
-    }
-
-    /** Real, shipped block-id substring filter - matches the actual
-     * naming convention confirmed in Server/BlockTypeList/
-     * PlantsAndTrees.json. Deliberately narrow for now (plants/flowers/
-     * mushrooms only, matching what was actually asked) rather than
-     * reporting every block type - most blocks (stone, dirt, grass) are
-     * not "notable" and would just be prompt noise. */
-    private static boolean isNotable(String blockId) {
-        String lower = blockId.toLowerCase();
-        return lower.contains("flower") || lower.contains("plant") || lower.contains("mushroom");
     }
 }

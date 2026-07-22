@@ -1,5 +1,32 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: player-pointing fallback - "if it not enough precise, take what I'm pointing at"
+
+Extended environment sensing: when the NPC's own ambient look-around scan
+finds nothing notable nearby, it now falls back to a real raycast along
+the requesting player's actual look direction.
+
+The obvious first choice - the game's own real `RaycastSelector.
+selectTargetPosition()` (used by its interaction/reticle system) - needed
+a `CommandBuffer<EntityStore>` that turned out to be unreachable
+(`Store.takeCommandBuffer()` is package-private, same dead end as
+`PrefabSearchUtil` earlier). Built a direct raycast instead: reverse-
+derived the real look-direction formula from the shipped `Rotation3f.
+lookAt()`'s own bytecode (it computes a rotation *from* a direction as
+`yaw = atan2(-dx,-dz)`, `pitch = asin(dy/length)` - inverted algebraically
+to go the other way), then stepped along that direction checking
+`World.getBlockType()` at each point, same mechanism the ambient scan
+already uses.
+
+Only resolvable at conversation-start (the one place with both ECS
+access and the specific player's identity together) - a real, accepted
+scoping limit, not an oversight.
+
+Boot-tested clean, jar rebuilt/reinstalled. No orchestrator changes -
+reuses the exact same situation-text shape and prompt instruction the
+ambient scan already has. The eye-height/direction math genuinely needs
+the user's own play session to confirm it's aimed correctly.
+
 ## 2026-07-22, later still: real environment sensing - "what color is the flower on the ground"
 
 Implemented the recommendation from the previous entry. Design
