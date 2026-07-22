@@ -228,6 +228,48 @@ additions). Not yet live-confirmed with two real players (needs a second
 connected client to verify the companion follows its actual owner and
 ignores a nearby non-owner).
 
+## 2026-07-22, later still: Hytale-expert persona rewrite
+
+Phase 2 of the re-plan: user's goal list opens with "AI NPC must talk to
+player as an Hytale expert." Rewrote `llm_client.py`'s `SYSTEM_TEMPLATE`
+opening to explicitly frame Adventurer as a seasoned Hytale traveler whose
+knowledge of "creatures, biomes, survival, and danger" is "learned
+firsthand" - not just a generic "{role} in a fantasy world" (the old
+wording, now dead weight from the multi-NPC era).
+
+Added a real hedging rule rather than just a confident-sounding persona:
+if asked a Hytale-knowledge question, answer specifically ONLY if it's
+covered in "Things you know" (the existing `semantic_facts` - which
+Phase 3's wiki knowledge base will start actually populating); otherwise
+admit the gap in character rather than inventing a confident wrong answer.
+Framed as "a real expert admits the edges of their own knowledge instead
+of bluffing" - this matters more once Phase 3 exists, since a 7B model
+asked something outside its retrieved facts would otherwise just
+hallucinate authoritative-sounding lore. Merged this into the existing
+personal-memory hedging rule (which only covered "don't invent facts about
+this specific player") rather than duplicating a near-identical rule.
+
+Also removed the now-fully-dead `NPCContext.role` field and its
+`{role}`/`role=ctx.role` plumbing in `llm_client.py`/`main.py` - it only
+ever fed the old `"a {role} in a fantasy world"` line, which the rewrite
+above replaced with hardcoded "adventurer" framing (single-NPC project
+now, no reason to keep it parameterized). `msg.get("npc_role", ...)` (the
+wire-protocol field used for the `DEFAULT_BASELINES` lookup) is untouched
+and unrelated - only the redundant context-object copy of it was removed.
+
+Considered, deliberately deferred: replacing `PlayerChatToAIListener.
+java`'s crude 9-word `WATER_KEYWORDS` substring match with an LLM-decided
+`GUIDE_TARGET` tag (see the plan's Phase 2). Guide-to-landmark is already
+confirmed live and the keyword match, while crude, hasn't caused a
+reported problem - not worth the churn alongside the bigger Phase 3/4 work
+still ahead. Revisit if it ever misfires in practice.
+
+Verified by rendering the template directly against a fake `NPCContext`
+(no format-string errors, `ctx.role` removal doesn't leave a dangling
+placeholder) - not yet live-confirmed against the real model (prompt
+*wording* quality needs a real conversation to judge, same limitation as
+every other persona-only change this session).
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/

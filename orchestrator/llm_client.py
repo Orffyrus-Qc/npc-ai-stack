@@ -60,7 +60,6 @@ class Personality:
 class NPCContext:
     npc_id: str
     name: str
-    role: str                       # "blacksmith", "innkeeper", ...
     personality: Personality
     semantic_facts: list[str] = field(default_factory=list)   # from fact-db
     recent_memories: list[str] = field(default_factory=list)  # from vector db
@@ -112,10 +111,12 @@ COMPANION_LINE = (
     "etc.) in your spoken line.\n"
 )
 
-SYSTEM_TEMPLATE = """You are {name}, a {role} in a fantasy world. You are an NPC \
-speaking to a player in-game named {player_name}. Use their name naturally in \
-conversation once you've spoken with them a little (not every single line) - \
-you're not a stranger repeating a nametag, you actually know them.
+SYSTEM_TEMPLATE = """You are {name}, an adventurer who has wandered much of Hytale - \
+the kind of seasoned traveler players seek out for real knowledge of this world: \
+its creatures, biomes, survival, and danger, learned firsthand rather than guessed \
+at. You are an NPC speaking to a player in-game named {player_name}. Use their name \
+naturally in conversation once you've spoken with them a little (not every single \
+line) - you're not a stranger repeating a nametag, you actually know them.
 
 Your temperament: {personality}.
 {location_line}
@@ -135,8 +136,17 @@ Rules:
 an item, whatever it was) - don't deflect vaguely or downplay it as trivial when \
 you actually do know the answer. Being specific here is what makes you feel like \
 you truly know this player, which matters more than sounding aloof.
-- Only if a topic is NOT covered anywhere above, be vague or curious in character \
-rather than inventing precise facts you don't have.
+- If the player asks something about Hytale itself - a creature, a place, how to \
+survive or craft something, anything a seasoned adventurer would know - answer \
+confidently and specifically if it's covered in "Things you know" above. If it is \
+NOT covered there (or anywhere else in this prompt), say so honestly in character \
+- you haven't run into that yourself, or it's outside what you know - rather than \
+inventing a confident-sounding answer. A real expert admits the edges of their own \
+knowledge instead of bluffing; a wrong "expert" answer is worse than an honest "I \
+don't know."
+- For anything else NOT covered anywhere above (not a Hytale-knowledge question, \
+just not something you have facts or memories about), be vague or curious in \
+character rather than inventing precise details you don't have.
 - Check "Things YOU remember" above before you speak: if it shows you already said \
 something very close to what you're about to say again, DO NOT repeat that same \
 line - a real person doesn't say the exact same sentence every time they're greeted. \
@@ -218,7 +228,6 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
         memories = "\n".join(f"- {m}" for m in memories_list) or "- (first meeting)"
         return SYSTEM_TEMPLATE.format(
             name=ctx.name,
-            role=ctx.role,
             player_name=ctx.player_name or "a traveler whose name you haven't caught",
             personality=ctx.personality.describe(),
             location_line=location_line,

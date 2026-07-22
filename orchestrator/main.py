@@ -162,7 +162,6 @@ async def _build_context(msg: dict) -> NPCContext:
     return NPCContext(
         npc_id=npc_id,
         name=msg.get("npc_name", npc_id),
-        role=msg.get("npc_role", "villager"),
         personality=persona,
         semantic_facts=facts,
         recent_memories=memories,
