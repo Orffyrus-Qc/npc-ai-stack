@@ -1,5 +1,41 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: real environment sensing - "what color is the flower on the ground"
+
+Implemented the recommendation from the previous entry. Design
+simplified mid-investigation at the user's direction: instead of
+Java-side parsing a color out of a block's own name, just retrieve the
+real block id and let the model interpret it (with wiki grounding
+already available) - much simpler than the chunk-coordinate work that
+was starting to look necessary.
+
+Confirmed via disassembly: `World.getBlockType(x, y, z)` resolves the
+owning chunk internally and accepts world-absolute coordinates directly
+- no manual chunk-local math needed. Confirmed via the real, shipped
+`PlantsAndTrees.json` block list that color really is baked into real
+block ids (`Plant_Flower_Common_Blue`, etc.), not a separate property.
+
+New `NoteNearbyObjectsAction`/`NearbyObjects`, mirroring the existing
+`NoteNearbyThreatAction`/`ThreatMemory` pattern exactly - a throttled
+tick-based scan (5-block radius, once per 5s) feeding the same
+situation-text pipeline. The model now translates a raw block id into a
+natural description (e.g. "bright blue" for `Plant_Flower_Common_Blue`) -
+confirmed correct via real-model testing, 3/3 trials.
+
+**Honest known limitation**: when nothing matching is actually there, the
+model still invents a color anyway (confirmed 0/10 across two rounds of
+real testing, even after significantly strengthening the "don't assume
+the premise" instruction - it measurably changed nothing). The question
+directly presupposes a flower exists, and this model size reliably goes
+along with that rather than correcting it. Not claiming this fixed -
+kept the instruction since it's harmless and the "something real IS
+there" case works reliably, but flagging this open rather than silently
+implying full coverage.
+
+Boot-tested clean, jar rebuilt/reinstalled, orchestrator rebuilt/
+redeployed. The real block scan itself needs the user's own play session
+to confirm end-to-end - what's verified here is the prompt/parsing side.
+
 ## 2026-07-22, later still: guide now waits for the player to actually catch up, not a flat 5s clock
 
 User report: "he go away then return to me and follow me" instead of

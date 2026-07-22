@@ -91,6 +91,14 @@ public class TalkToAIAction extends ActionBase {
 
         String threat = ThreatMemory.describe(npcId);
         String fullSituation = threat.isEmpty() ? situation : situation + " " + threat;
+        // 2026-07-22, "npc must sense its environment": live, re-checked
+        // every turn (a plant on the ground doesn't move, but which one
+        // is closest can still change as the NPC/player do) - same
+        // not-cached-on-Conversation treatment as threat, above.
+        String nearbyObjects = NearbyObjects.describe(npcId);
+        if (!nearbyObjects.isEmpty()) {
+            fullSituation += " " + nearbyObjects;
+        }
 
         // Marks this NPC as awaiting a reply so IsAwaitingReplySensor's
         // "thinking" particle shows above its head until the callback below

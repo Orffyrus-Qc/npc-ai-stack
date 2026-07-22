@@ -85,6 +85,9 @@ public class NpcAiPlugin extends JavaPlugin {
         NPCPlugin.get().registerCoreComponentType("NoteAttackedByPlayer", NoteAttackedByPlayerActionBuilder::new);
         LOGGER.atInfo().log("Registered NoteAttackedByPlayer NPC action type");
 
+        NPCPlugin.get().registerCoreComponentType("NoteNearbyObjects", NoteNearbyObjectsActionBuilder::new);
+        LOGGER.atInfo().log("Registered NoteNearbyObjects NPC action type");
+
         NPCPlugin.get().registerCoreComponentType("IsCompanion", IsCompanionSensorBuilder::new);
         LOGGER.atInfo().log("Registered IsCompanion NPC sensor type");
 

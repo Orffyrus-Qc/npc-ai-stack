@@ -85,6 +85,13 @@ public class PlayerChatToAIListener {
         String threat = ThreatMemory.describe(conversation.npcId());
         String situation = conversation.situation();
         String fullSituation = threat.isEmpty() ? situation : situation + " " + threat;
+        // 2026-07-22, "npc must sense its environment": same live,
+        // no-NPC-entity-access-needed treatment as threat, above - kept
+        // updated by the NPC's own ongoing tick-based NoteNearbyObjectsAction.
+        String nearbyObjects = NearbyObjects.describe(conversation.npcId());
+        if (!nearbyObjects.isEmpty()) {
+            fullSituation += " " + nearbyObjects;
+        }
 
         // See TalkToAIAction's matching comment - shows the "thinking"
         // particle above this NPC's head until the callback below clears it.

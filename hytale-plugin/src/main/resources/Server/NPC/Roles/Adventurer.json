@@ -111,6 +111,18 @@
               ]
             },
             {
+              "$Comment": "2026-07-22, \"npc must sense its environment\": real, tick-based (but throttled internally - see NearbyObjects.RESCAN_INTERVAL_MILLIS, NOT a JSON-level throttle) scan of the actual world BLOCKS around this NPC for anything notable (plants/flowers), feeding NearbyObjects the same way the node below feeds ThreatMemory. Unconditional \"Any\" sensor since blocks aren't entities - there's nothing for a Mob/Player sensor to match against here. Reports the raw real block id (e.g. \"Plant_Flower_Common_Blue\") rather than trying to parse a color out of it in Java - see NoteNearbyObjectsAction's javadoc for why that's left to the model (confirmed via the real, shipped PlantsAndTrees.json block list that color is baked into these specific real ids already).",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Any"
+              },
+              "Actions": [
+                {
+                  "Type": "NoteNearbyObjects"
+                }
+              ]
+            },
+            {
               "$Comment": "Adventurer-specific: notice nearby hostile creatures, feeds npc-ai-stack's ThreatMemory so the AI can react to it in conversation. LockOnTarget makes the found hostile the locked \"Target\" the chase/attack nodes below react to. 2026-07-21: switched the real gating to a custom \"IsHostileSpecies\" Filter (EntityFilterHostileSpecies.java) instead of relying on the Attitude Prioritiser's pairwise AttitudesByPriority match, after \"npc must be hostile to all enemy\" turned up a second, deeper bug than the earlier [Hostile,Neutral] widening fixed: WorldSupport.getAttitude() (AttitudeView.getAttitude, confirmed via disassembly) resolves PAIRWISE - per-entity override, then an AttitudeGroup lookup (each species' own shipped \"Groups\" JSON lists which OTHER group names it holds Hostile toward), then finally falls back to the OBSERVER's (Adventurer's) own DefaultNPCAttitude (\"Ignore\"). Fetched the real shipped AttitudeGroup assets live: only Trork.json lists \"Kweebec\" (Adventurer's AttitudeGroup) as Hostile - Goblin.json's Hostile list is empty, Outlander.json has no Hostile key at all, Scarak.json is hostile only to \"Feran\". So the pairwise system only ever recognized Trork as an enemy; every other hostile species fell through to Adventurer's own \"Ignore\" default and was silently excluded (an unlisted attitude reaching SensorEntityPrioritiserAttitude.getPriority() throws IllegalStateException - confirmed it's excluded upstream via the Prioritiser's own buildProvidedFilters(), an implicit inclusion filter). IsHostileSpecies instead reads the CANDIDATE's own DefaultPlayerAttitude directly (the one flag every dangerous vanilla mob sets consistently, since it's literally what makes them attack players) - a species-agnostic signal, not a narrow rivalry lookup. AttitudesByPriority widened to include \"Ignore\" (plus Friendly/Revered for safety) so the Prioritiser's own implicit filter never rejects a candidate IsHostileSpecies already matched - it now only ranks among survivors (pairwise-Hostile ranked above pairwise-Ignore, a reasonable tiebreak when multiple threats are present). Not yet live-confirmed against a non-Trork hostile (Goblin/Outlander/Scarak) - see hytale-plugin/README.md.",
               "Continue": true,
               "Sensor": {

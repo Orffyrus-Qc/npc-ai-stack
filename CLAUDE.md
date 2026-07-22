@@ -2068,6 +2068,72 @@ a queryable property (vs. baked into the block's name, e.g. separate
 nothing implemented yet, this is a recommendation pending that
 investigation and user confirmation.
 
+## 2026-07-22, later still: environment sensing - real block scanning, grounded correctly, one honest known limitation
+
+Implemented the recommendation from the previous entry: "npc must sense
+its environment... what is the color of the flower on the ground between
+us." User redirected the design mid-investigation: don't try to parse
+color out of the block's own name in Java - just retrieve the real item
+name and let the model (with wiki grounding already available) interpret
+it. Much simpler, and avoided a chunk-coordinate rabbit hole I was
+partway into.
+
+**Real mechanism, confirmed via disassembly**: `World.getBlockType(x, y,
+z)` (inherited via `ChunkAccessor`/`IChunkAccessorSync`'s default
+implementation) resolves the owning chunk internally via
+`ChunkUtil.indexChunkFromBlock(x, z)` + `getChunk(long)`, then queries
+that chunk with the SAME unmodified world-absolute coordinates - no
+manual world-to-chunk-local coordinate math needed at all, once traced
+through the actual bytecode rather than guessed. Confirmed via the real,
+shipped `Server/BlockTypeList/PlantsAndTrees.json` asset that color really
+is baked directly into real block ids (`Plant_Flower_Common_Blue`,
+`Plant_Flower_Bushy_Red` - 9+ real color-named flower variants), not a
+separate queryable property - so reporting the raw id is already a
+meaningful, real fact for the model to work with.
+
+**New `NoteNearbyObjectsAction`/`NearbyObjects`**, mirroring the existing
+`NoteNearbyThreatAction`/`ThreatMemory` pattern exactly: a tick-based
+action (bare "Any" sensor, since blocks aren't entities) scans a small
+radius (5 blocks horizontal, -2/+1 vertical relative to the NPC's feet)
+for block ids containing "flower"/"plant"/"mushroom", throttled to once
+per 5 real seconds internally (`NearbyObjects.shouldRescan()`) so it's
+cheap enough to run every tick without JSON-level throttling. Feeds the
+closest match into the same situation-text pipeline `ThreatMemory`
+already uses (live, re-checked every turn, not cached on the
+Conversation).
+
+**Prompt-side**: told the model to translate a raw block id it sees in
+"Current situation" into a natural in-character description (color etc.)
+rather than reciting the raw id verbatim. Real-model test (synthetic
+situation string matching `NearbyObjects.describe()`'s real output shape,
+since this can't be exercised without a live spawned NPC standing near an
+actual flower): correctly said "bright blue" for a real
+`Plant_Flower_Common_Blue` in the situation - 3/3 trials, consistent.
+
+**Known, honestly-documented limitation, not silently claimed fixed**:
+when NOTHING matching is in the situation at all, the model still
+invents a color anyway (confirmed 0/10 across two separate rounds of
+live testing, including after strengthening the "don't play along with
+an assumed premise" instruction significantly - the stronger wording
+measurably changed nothing). The player's question directly presupposes
+a flower exists ("what color is THE flower"), and this size model
+reliably goes along with that presupposition rather than correcting it,
+even when told explicitly not to. This is the same class of instruction-
+following limit as the earlier GUIDE_TARGET keyword-preservation nudge
+(also didn't always take) - kept the instruction anyway since it's
+harmless and correctly grounds the case where something real IS present,
+but this specific "admit nothing is there" case remains open. Not chasing
+further with more prompt wording - diminishing returns confirmed via
+direct live testing, not assumed.
+
+Boot-tested clean (registration confirmed via log:
+"Registered NoteNearbyObjects NPC action type"), jar rebuilt/reinstalled,
+orchestrator rebuilt/redeployed. The actual Java-side block scan itself
+(finding a REAL flower near a REAL spawned NPC) still needs the user's
+own play session to confirm end-to-end - what's verified here is the
+prompt/parsing side via a synthetic situation string matching the real
+output shape.
+
 ## Tuning table
 
 See README.md — it maps symptoms (slow dialogue, world stutter, OOM) to the
