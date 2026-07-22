@@ -90,11 +90,10 @@
               }
             },
             {
-              "$Comment": "\"AI process message waiting\" indicator: a floating thought-bubble particle above this NPC's head while npc-ai-stack is waiting on a real orchestrator round trip - a reply that just appears in chat with zero visual buildup reads as unnaturally instant. Real, shipped particle asset (Server/Particles/NPC/Emotions/Question_Subtle.particlesystem); Offset [0, 2.1, 0] matches the real, shipped usage in Trork's own Alerted-state SpawnParticles call. \"Once\": true so this fires once per wait, not every tick for the whole duration - see IsAwaitingReplySensor.java/AwaitingReplyState.java.",
+              "$Comment": "\"AI process message waiting\" indicator: a floating thought-bubble particle above this NPC's head while npc-ai-stack is waiting on a real orchestrator round trip - a reply that just appears in chat with zero visual buildup reads as unnaturally instant. Real, shipped particle asset (Server/Particles/NPC/Emotions/Question_Subtle.particlesystem); Offset [0, 2.1, 0] confirmed correct for this Kweebec-based model via the real, shipped Component_Kweebec_Instruction_Search.json (same offset, its own 'Question' particle). Re-fire throttling lives in IsAwaitingReplySensor.java itself (a 2s per-NPC cooldown), NOT the JSON \"Once\" modifier - confirmed via disassembly and live testing that \"Once\" only means \"once per STATE ENTRY\" here (paired with an unconditional \"Any\" sensor in every real shipped usage), not \"once per rising edge of a condition\" - this condition can flip true/false many times within one uninterrupted Watching visit (once per chat message), so \"Once\" latched after the first reply and never fired again; see IsAwaitingReplySensor.java's docstring for the full story.",
               "Continue": true,
               "Sensor": {
-                "Type": "IsAwaitingReply",
-                "Once": true
+                "Type": "IsAwaitingReply"
               },
               "Actions": [
                 {
@@ -306,8 +305,7 @@
               "$Comment": "Same \"AI process message waiting\" indicator as the Watching state above - the very start of a click-triggered conversation's wait happens here, in $Interaction, before the ~1s Timeout below reverts to Watching.",
               "Continue": true,
               "Sensor": {
-                "Type": "IsAwaitingReply",
-                "Once": true
+                "Type": "IsAwaitingReply"
               },
               "Actions": [
                 {

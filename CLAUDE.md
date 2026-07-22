@@ -487,9 +487,11 @@ NPC sensor type`, zero validation errors, `ParticleSystem: 569` assets
 loaded including the referenced one). Pacing verified live end-to-end:
 three real dialogue turns through a real WebSocket connection to the
 running orchestrator each measured 1.30s, confirmed padding a reply that
-would otherwise have arrived instantly. The icon itself is **not
-live-confirmed** - same limitation as everything else requiring a
-connected client this session: boot/validation-tested only.
+would otherwise have arrived instantly. The icon itself was **not
+live-confirmed at the time** - and live testing (same day, see the section
+below) found it genuinely never appeared. Boot-testing only proves the
+role JSON validates; it can't catch "this sensor's own logic never
+actually returns true," which is exactly what happened here.
 
 ## 2026-07-21, later still: removed every pre-written fallback line
 
@@ -546,6 +548,54 @@ gets a real reply unaffected by any of this. `gradlew build`/`runServer`
 clean after the Java-side changes (no role JSON touched this round, pure
 logic changes in `NpcAiBridge.java`/`TalkToAIAction.java`/
 `PlayerChatToAIListener.java`).
+
+## 2026-07-21, later still: the "thinking" icon never appeared - real bug, found and fixed
+
+Live-tested (first real live check of anything from this session): the
+"thinking" particle never showed up at all. Boot-testing only proves role
+JSON validates against the engine's schema - it can't catch "this custom
+sensor's own logic never actually returns true when it should," which is
+exactly what was wrong.
+
+Root cause: `IsAwaitingReplySensor` used the JSON `"Once": true` modifier
+to stop the particle from re-spawning every tick - looked like the obvious
+tool for the job, matching a pattern seen in `Component_Instruction_
+Wild_Panic_Passive.json`. Disassembling `SensorBase` (`matches()` returns
+true unless both `once` and an internal `triggered` flag are set;
+`triggered` is only flipped by `setOnce()`/`clearOnce()`, which a custom
+sensor never calls itself - the *framework* calls them) plus finding a
+second, even closer real reference -
+`Component_Kweebec_Instruction_Search.json`, which spawns a "Question"
+particle at the *exact same* `Offset: [0, 2.1, 0]` this code already used
+- revealed the actual pattern: every real, shipped use of `"Once": true`
+pairs it with an unconditional `"Type": "Any"` sensor, inside a
+state-specific Instructions branch. It means "fire once per STATE ENTRY"
+(reset by the state-transition machinery when the containing state is
+re-entered), not "fire once per rising edge of a dynamic condition while
+remaining in the same state." `IsAwaitingReply` flips true/false/true
+repeatedly *within* one uninterrupted `Watching` visit (once per chat
+message) - the state itself never re-enters between messages, so the
+"Once" latch set on the very first reply never got a chance to reset, and
+the particle never fired again for the rest of that visit (in the worst
+case, never at all, depending on exactly when the player first looked).
+
+That same search also ruled out a second suspect: the `Offset: [0, 2.1, 0]`
+value (copied from Trork's own `Alerted` particle) looked like it might be
+miscalibrated for the much smaller Kweebec-based models these NPCs use -
+the Search file's identical offset on an identical model family confirmed
+it was never the problem.
+
+Fix: removed `"Once": true` from all 8 occurrences (4 role JSONs x 2
+states each); `IsAwaitingReplySensor` now self-throttles with its own
+2-second-per-NPC cooldown (a plain static map, same shape as everywhere
+else in this plugin), independent of the framework's state-entry-tied
+`Once` lifecycle entirely. Re-fires periodically for a long wait instead of
+a single one-shot attempt that could latch shut.
+
+`gradlew build`/`runServer` clean, zero validation errors, same NPC
+counts as before. Not yet re-confirmed live (needs the next play session)
+but the fix no longer depends on any framework behavior that couldn't be
+directly proven correct via disassembly.
 
 ## 2026-07-21 audit pass, approved/ wired up, then a real GPU load test
 
