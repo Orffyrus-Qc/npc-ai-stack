@@ -524,6 +524,70 @@ against a live conversation actually producing this failure mode again
 (needs extended play to see if it recurs - inherently intermittent since
 it depends on the model choosing to ramble).
 
+## 2026-07-22, later still: a SECOND, different "context drop" bug - real-world wiki content leaking into dialogue
+
+Live-tested report: "npn just dropped out of context date '2014' in the
+chat" - initially looked like a recurrence of the tag-trailing-garbage bug
+just fixed above, but the exact string was different ("2014" alone, not a
+name+year like "su2014"), so it was verified separately rather than
+assumed to be the same root cause.
+
+**Confirmed the trailing-tag fix was actually deployed and working**
+(`inspect.getsource(_parse_dialogue_response)` on the running container
+showed the new `tag_start` logic present) - so this had to be something
+else. Searched `wiki_knowledge` directly for a bare "2014" and found it
+immediately: the real "Hypixel Network" wiki page - `August 1st 2014 -
+Minecraft's EULA change drops...` - a REAL-WORLD company history
+timeline, not in-universe Hytale lore at all.
+
+**Root cause**: this wiki mixes in-universe fantasy content (Trork,
+Kweebec, Zones, items) with real-world meta content (the studio and its
+staff, wiki administration/community pages) in the same mainspace
+namespace - `list=allpages` (what the crawler enumerates) doesn't
+distinguish them. Confirmed via the MediaWiki API's own
+`prop=categories` that this IS cleanly distinguishable: real lore
+(`Trork` -> `Enemies`/`Factions`/`Hostile`/`Races`) vs. meta
+(`Hypixel Network` -> `Hypixel`; `Developers` -> `Developers`).
+
+**Fix**: `wiki_ingest.py` now fetches `revisions|categories` together
+(one batched API call, no extra round trip) and skips - and cleans up
+already-ingested instances of - any page tagged with a curated
+`_META_CATEGORIES` set (Hypixel, Developers, Community, Guides,
+Tutorials, Multiplayer, Updates, and ~30 similar). `WikiKnowledgeStore`
+got a new `delete_page()` for this cleanup path.
+
+**Real mistake caught by verifying against actual data, not assumed
+correct**: the first version of `_META_CATEGORIES` also included wiki
+*quality/maintenance* tags ("Articles in need of cleanup", "Citations
+needed", "Candidates for deletion") on the wrong assumption that
+administrative-sounding category names meant meta content - deployed it,
+then directly checked what got excluded and found real lore
+(`Adamantite` - tagged both `Items` AND `Articles in need of cleanup`,
+since it's a legitimate but underwritten stub) had been wrongly deleted
+alongside `Hypixel Network`/`Developers`. Those tags describe a page's
+*editorial status*, not its *topic*, and can sit on any page regardless
+of subject - removed them from the set, redeployed, and directly
+re-verified: `Hypixel Network`/`Developers` stay excluded, `Adamantite`
+comes back (1 chunk), `Trork`/`Kweebec` unaffected throughout. Of 650
+pages checked, 267 were real-world/meta and correctly excluded - a
+substantial fraction of this wiki, confirming the category-mixing
+problem was real and worth fixing properly rather than patching around
+the one reported symptom.
+
+**Added a complementary prompt-level safeguard** regardless of curation
+quality: a new `SYSTEM_TEMPLATE` rule that "Hytale lore you've picked up"
+is background knowledge, not something to recite unprompted - only use it
+if actually relevant to what's being discussed, ignore it otherwise
+rather than working it in as disconnected trivia. Cheap defense-in-depth
+against the same "reads as dropping context" symptom even for
+legitimately-retrieved, on-topic content that just doesn't fit this
+exact exchange.
+
+Deployed with clean restarts at each step (verified live data after each
+change rather than trusting the fix worked). Not yet re-confirmed against
+a live conversation (needs extended play; both this and the previous
+"context drop" bug are intermittent by nature).
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/

@@ -64,6 +64,16 @@ class WikiKnowledgeStore:
         )
         return points[0].payload["revision_id"] if points else None
 
+    async def delete_page(self, title: str) -> None:
+        """Removes all stored chunks for a page - used both when a page's
+        chunk count shrinks on re-ingest (see replace_page) and when a page
+        already ingested under an older ruleset turns out to be excluded now
+        (see wiki_ingest.py's _META_CATEGORIES cleanup)."""
+        await self._qdrant.delete(
+            COLLECTION,
+            points_selector=Filter(must=[FieldCondition(key="title", match=MatchValue(value=title))]),
+        )
+
     async def replace_page(self, title: str, url: str, revision_id: int, chunks: list[str]) -> None:
         """Delete all existing chunks for this page (handles the chunk count
         shrinking between revisions) and insert the fresh set. Point ids are
@@ -72,10 +82,7 @@ class WikiKnowledgeStore:
         an UNCHANGED page would just overwrite identical points - but callers
         should check get_revision() first and skip unchanged pages entirely
         to avoid the wasted embedding work."""
-        await self._qdrant.delete(
-            COLLECTION,
-            points_selector=Filter(must=[FieldCondition(key="title", match=MatchValue(value=title))]),
-        )
+        await self.delete_page(title)
         if not chunks:
             return
         await self._qdrant.upsert(

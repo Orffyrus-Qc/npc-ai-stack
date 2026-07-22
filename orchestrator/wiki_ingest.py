@@ -38,6 +38,42 @@ REVISION_BATCH_SIZE = 50   # MediaWiki's own per-request titles= cap
 PAGE_FETCH_DELAY_S = 0.3   # politeness delay between per-page wikitext fetches
 CHUNK_CHARS = 1200         # ~300 tokens/chunk at ~4 chars/token
 
+# 2026-07-22 real bug found live: the NPC recited a real-world Hypixel
+# company history date ("August 1st 2014") mid-conversation, completely out
+# of character - traced to the "Hypixel Network" wiki page (Category:Hypixel)
+# getting ingested and later retrieved/parroted verbatim. This wiki mixes
+# in-universe fantasy lore with real-world meta content (the studio, its
+# staff, wiki administration, community pages) in the SAME mainspace
+# namespace - confirmed live via the MediaWiki API's own categories
+# (action=query&prop=categories) that real lore pages (Trork -> Enemies/
+# Factions/Hostile/Races) and meta pages (Hypixel Network -> Hypixel;
+# Developers -> Developers) are cleanly distinguishable this way, unlike
+# namespace alone. A companion NPC has no business citing the real
+# developer studio's founding date as if it were something it "picked up in
+# its travels" through the fantasy world - excluded at the category level
+# rather than trying to guess from title/content alone.
+#
+# Deliberately excludes wiki QUALITY/maintenance tags ("Articles in need of
+# cleanup", "Citations needed", "Candidates for deletion") - a first version
+# of this set included them and wrongly excluded real lore stubs (Adamantite
+# is tagged both "Items" AND "Articles in need of cleanup" - a legitimate,
+# if underwritten, lore page, not a real-world one). Those tags describe a
+# page's EDITORIAL STATUS, not its TOPIC, and can sit on any page regardless
+# of subject - only true topic categories belong in this set.
+_META_CATEGORIES = {
+    "hypixel", "developers", "community", "hytale wiki", "administration",
+    "author", "blog posts", "concept art", "creators", "director",
+    "disambiguations", "executive producer", "gamer", "games",
+    "general wiki templates", "guides", "help", "hytale youtubers",
+    "images", "modding", "music", "musician", "news",
+    "pages with broken file links", "polls", "pre-release",
+    "ru translation", "rights", "screenwriter", "servers",
+    "site maintenance", "sitarist", "template documentation", "templates",
+    "templates/infobox", "templates/navbox", "templates/quote",
+    "templates/utility", "tutorials", "multiplayer", "updates", "videos",
+    "voice actor", "youtuber",
+}
+
 
 async def _fetch_all_titles(client: httpx.AsyncClient) -> list[str]:
     titles: list[str] = []
@@ -56,23 +92,38 @@ async def _fetch_all_titles(client: httpx.AsyncClient) -> list[str]:
     return titles
 
 
-async def _fetch_revisions(client: httpx.AsyncClient, titles: list[str]) -> dict[str, int]:
-    """title -> current revision id, batched REVISION_BATCH_SIZE titles/call."""
-    out: dict[str, int] = {}
+async def _fetch_revisions_and_categories(
+    client: httpx.AsyncClient, titles: list[str]
+) -> dict[str, tuple[int, set[str]]]:
+    """title -> (current revision id, lowercased category names), batched
+    REVISION_BATCH_SIZE titles/call. Fetches both in the same request
+    (prop=revisions|categories) rather than a separate round trip per page -
+    category membership is what _is_meta_page() below uses to skip
+    real-world/meta content before ever fetching its wikitext."""
+    out: dict[str, tuple[int, set[str]]] = {}
     for i in range(0, len(titles), REVISION_BATCH_SIZE):
         batch = titles[i:i + REVISION_BATCH_SIZE]
         params = {
-            "action": "query", "prop": "revisions", "rvprop": "ids",
-            "titles": "|".join(batch), "format": "json",
+            "action": "query", "prop": "revisions|categories", "rvprop": "ids",
+            "cllimit": "500", "titles": "|".join(batch), "format": "json",
         }
         resp = await client.get(WIKI_API_URL, params=params, timeout=30)
         resp.raise_for_status()
         pages = resp.json().get("query", {}).get("pages", {})
         for page in pages.values():
             revs = page.get("revisions")
-            if revs:
-                out[page["title"]] = revs[0]["revid"]
+            if not revs:
+                continue
+            cats = {
+                c["title"].split(":", 1)[-1].strip().lower()
+                for c in page.get("categories", [])
+            }
+            out[page["title"]] = (revs[0]["revid"], cats)
     return out
+
+
+def _is_meta_page(categories: set[str]) -> bool:
+    return bool(categories & _META_CATEGORIES)
 
 
 async def _fetch_wikitext(client: httpx.AsyncClient, title: str) -> str | None:
@@ -154,8 +205,8 @@ def chunk_text(text: str, chunk_chars: int = CHUNK_CHARS) -> list[str]:
 
 
 async def run_ingest_cycle(store: WikiKnowledgeStore, max_pages: int | None = None) -> dict:
-    """Returns a summary dict for logging: {checked, changed, skipped, errors}."""
-    summary = {"checked": 0, "changed": 0, "skipped": 0, "errors": 0}
+    """Returns a summary dict for logging: {checked, changed, skipped, excluded, errors}."""
+    summary = {"checked": 0, "changed": 0, "skipped": 0, "excluded": 0, "errors": 0}
     async with httpx.AsyncClient() as client:
         try:
             titles = await _fetch_all_titles(client)
@@ -167,16 +218,26 @@ async def run_ingest_cycle(store: WikiKnowledgeStore, max_pages: int | None = No
         summary["checked"] = len(titles)
 
         try:
-            live_revisions = await _fetch_revisions(client, titles)
+            live_info = await _fetch_revisions_and_categories(client, titles)
         except Exception:
-            logger.exception("wiki_ingest: failed to fetch revision ids, aborting cycle")
+            logger.exception("wiki_ingest: failed to fetch revision/category info, aborting cycle")
             return summary
 
         for title in titles:
-            live_rev = live_revisions.get(title)
-            if live_rev is None:
+            info = live_info.get(title)
+            if info is None:
                 continue
+            live_rev, categories = info
             try:
+                if _is_meta_page(categories):
+                    # Real-world/meta content (the studio, staff, wiki
+                    # administration, community pages) - never belongs in an
+                    # in-character companion's mouth. Clean up in case an
+                    # earlier cycle (before this filter existed) already
+                    # ingested it - see _META_CATEGORIES's comment.
+                    await store.delete_page(title)
+                    summary["excluded"] += 1
+                    continue
                 stored_rev = await store.get_revision(title)
                 if stored_rev == live_rev:
                     summary["skipped"] += 1
