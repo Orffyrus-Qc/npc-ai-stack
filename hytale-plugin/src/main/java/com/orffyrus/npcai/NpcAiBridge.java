@@ -244,7 +244,34 @@ public class NpcAiBridge implements WebSocket.Listener {
         StringBuilder sb = new StringBuilder();
         for (int j = start; j < json.length(); j++) {
             char c = json.charAt(j);
-            if (c == '\\' && j + 1 < json.length()) { sb.append(json.charAt(++j)); }
+            if (c == '\\' && j + 1 < json.length()) {
+                char next = json.charAt(++j);
+                // 2026-07-22 real bug found live: this only ever handled
+                // single-char escapes (correct for "\"" -> '"', "\\" -> '\'),
+                // but a Unicode escape (backslash, then 'u', then 4 hex
+                // digits) has 'u' as the char right after the backslash -
+                // falling into this same branch appended just 'u' and left
+                // the four hex digits to be appended as plain characters by
+                // the loop's next iterations, silently mangling e.g. an
+                // em-dash ("-", U+2014, from Python's json.dumps() default
+                // ensure_ascii=True escaping any non-ASCII character the
+                // model happens to use) into the literal text "u2014" glued
+                // onto whatever word came next - confirmed live in the real
+                // server log: "Emerald Wildsu2014I've got a feeling...".
+                // Decode the Unicode escape properly; \n/\r/\t as a
+                // defensive completeness match (dialogue text
+                // is never expected to contain a literal one after
+                // _parse_dialogue_response()'s tag-stripping, but a hand-
+                // rolled parser handling some JSON escapes and not others is
+                // exactly how this bug happened in the first place).
+                if (next == 'u' && j + 4 < json.length()) {
+                    sb.append((char) Integer.parseInt(json.substring(j + 1, j + 5), 16));
+                    j += 4;
+                } else if (next == 'n') { sb.append('\n'); }
+                else if (next == 'r') { sb.append('\r'); }
+                else if (next == 't') { sb.append('\t'); }
+                else { sb.append(next); }  // "\"", "\\", "\/" - the escaped char itself
+            }
             else if (c == '"') break;
             else sb.append(c);
         }

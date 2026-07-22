@@ -1,5 +1,34 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: found the real "dropped context" bug - a mangled Unicode escape
+
+Two earlier fixes today (trailing-tag hallucination, real-world wiki
+content) didn't actually explain a live report: `"Emerald Wildsu2014I've
+got a feeling..."` - no space, `u2014` glued onto the adjacent word.
+That's `—` (the em-dash Unicode escape) with its backslash gone missing,
+confirmed by reading the real server log rather than guessing again.
+
+Root cause on both sides of the wire: `main.py`'s `json.dumps()` used the
+default `ensure_ascii=True`, escaping the model's stylistic em-dash as
+`\uXXXX`; `NpcAiBridge.java`'s hand-rolled `extract()` only ever handled
+single-char escapes (`\"` -> `"`, `\\` -> `\`) - a Unicode escape has `u`
+right after the backslash, so it fell into that branch, kept just the
+`u`, and left the four hex digits (`2014`) as plain text. Fixed both:
+`ensure_ascii=False` on the Python side (sends raw UTF-8, sidesteps the
+gap for any non-ASCII character), and `extract()` now properly decodes
+`\uXXXX` plus `\n`/`\r`/`\t`.
+
+Verified via a reflection-based test harness calling the real compiled,
+private `extract()` method with the exact reported input - confirmed the
+real em-dash character comes through with no mangled text, and existing
+escapes (`\"`, `\\`) still work. `./gradlew build`/`runServer` clean. A
+near-miss caught mid-deployment: two `java.exe` processes were running
+after the boot-test - checked `CreationDate`/`CommandLine` before
+touching either, since one turned out to be the user's own real, active
+Hytale session (not a leftover test server) - left both alone. That live
+session won't pick up this fix until restarted (plugin jars aren't
+hot-reloaded).
+
 ## 2026-07-22, later still: companion no longer stares at its owner mid-fight
 
 Live-tested report: "when npc is in combat mode then disable npc looking at

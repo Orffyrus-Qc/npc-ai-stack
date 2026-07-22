@@ -414,7 +414,20 @@ async def plugin_connection(ws) -> None:
                 # no reason to re-decide ACCEPT_TAME for a player it already
                 # considers a companion.
                 "is_companion": is_companion,
-            }))
+            # ensure_ascii=False: 2026-07-22 real bug found live - the model
+            # naturally uses em-dashes ("Emerald Wilds—I've got a feeling...")
+            # in its dialogue style. json.dumps()'s default ensure_ascii=True
+            # escapes any non-ASCII character as "\uXXXX", and
+            # NpcAiBridge.java's hand-rolled extract() doesn't decode that
+            # escape (it only handles single-char escapes like \" and \\,
+            # so "—" became literal "u2014" glued onto the adjacent
+            # word - confirmed live in the real server log:
+            # "Emerald Wildsu2014I've got a feeling..."). Sending raw UTF-8
+            # instead of \uXXXX escapes sidesteps the gap entirely for any
+            # non-ASCII character (em-dashes, curly quotes, accents), not
+            # just this one - see NpcAiBridge.java's extract() for the
+            # complementary fix on the decoding side.
+            }, ensure_ascii=False))
         except Exception:
             logger.exception("failed handling %s", mtype)
 

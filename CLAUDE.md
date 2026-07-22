@@ -588,6 +588,75 @@ change rather than trusting the fix worked). Not yet re-confirmed against
 a live conversation (needs extended play; both this and the previous
 "context drop" bug are intermittent by nature).
 
+## 2026-07-22, later still: the ACTUAL "context drop" bug found - a mangled Unicode escape, not hallucination
+
+User: "error remain, try to remove Emerald Wilds from the composition" -
+the earlier two fixes (trailing-tag hallucination, real-world wiki
+content) didn't address this, and the suggested workaround (drop the
+location text) would have only hidden the symptom. Pulled the actual
+recent server log instead of guessing further, and found the real,
+exact, reproducible mechanism:
+
+```
+[PlayerChatToAIListener] [Wandering Adventurer] Sure thing, Orffyrus.
+Let's head towards those Emerald Wildsu2014I've got a feeling we might
+find some interesting stuff there.
+```
+
+`"Wildsu2014I've"` - no space, "u2014" glued directly onto the adjacent
+word. This is `—` (the Unicode escape for an em-dash, "-") with its
+backslash gone missing - not a hallucinated username, not wiki content.
+This means the EARLIER "su2014" report was very likely this exact same
+bug the whole time (a different word happened to precede the em-dash) -
+the trailing-tag-hallucination fix from before was a real, independently
+worthwhile improvement (verified against a real reproducible risk: no
+stop token means the model CAN ramble past its tags), but it was never
+actually the cause of this specific symptom.
+
+**Root cause, confirmed on both sides of the wire**:
+- `main.py`'s `ws.send(json.dumps({...}))` used Python's default
+  `ensure_ascii=True`, which escapes any non-ASCII character (an em-dash,
+  which the model uses naturally as a stylistic pause) as `\uXXXX` in the
+  JSON text sent to the plugin.
+- `NpcAiBridge.java`'s hand-rolled `extract()` only ever handled
+  single-char escapes (correctly turning `\"` into `"`, `\\` into `\`) -
+  a Unicode escape has `u` as the character right after the backslash, so
+  it fell into that same branch, appended just `u`, and left the four hex
+  digits (`2014`) to be appended as plain text by the loop's next
+  iterations. Exactly reproduces the observed bug.
+
+**Fix, both sides**:
+- `main.py`: added `ensure_ascii=False` to the `json.dumps()` call - sends
+  raw UTF-8 instead of escape sequences, avoiding the gap entirely for
+  ANY non-ASCII character (em-dashes, curly quotes, accents), not just
+  this one occurrence.
+- `NpcAiBridge.java`'s `extract()`: now properly decodes `\uXXXX` (parses
+  the 4 hex digits into the real character) plus `\n`/`\r`/`\t` as a
+  defensive completeness pass, instead of only single-char escapes.
+
+**Verified independently, not just assumed fixed**: wrote a small
+reflection-based test harness (`TestExtract.java`) invoking the real
+compiled, private `extract()` method directly with the EXACT reported
+input (`"Emerald Wilds—I've got..."`) - confirmed the result now
+contains the real em-dash character and zero mangled "u2014" text, and
+that basic escapes (`\"`, `\\`) still work correctly (no regression).
+Separately confirmed in Python that `ensure_ascii=False` actually stops
+emitting the escape sequence at the source. `./gradlew build`/`runServer`
+clean (`Validation complete.`, `Generic: 1`, `Hytale Server Booted!`).
+
+**Real near-miss caught mid-deployment**: after the boot-test, `tasklist`
+showed two `java.exe` processes - checked `CreationDate`/`CommandLine` via
+`Get-CimInstance Win32_Process` before touching either, since the
+established "last java.exe = my leftover test server" pattern from
+earlier sessions would have been WRONG here: one was the Gradle daemon,
+the other was the user's own real, currently-running Hytale session
+(`--singleplayer --owner-name="Orffyrus"`, a real client attached),
+started well before this boot-test - not a test artifact to clean up.
+Neither was touched. Since a running server doesn't hot-reload its plugin
+jar, that live session is still on the pre-fix build - a restart is
+needed to actually pick this fix up, separate from just reinstalling the
+jar file.
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/
