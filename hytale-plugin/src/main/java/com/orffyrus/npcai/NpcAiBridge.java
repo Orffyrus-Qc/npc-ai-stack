@@ -25,7 +25,7 @@ public class NpcAiBridge implements WebSocket.Listener {
 
     /** (npcId, text, action, isCompanion) - action is one of the
      * orchestrator's llm_client.VALID_ACTIONS ("none", "offer_guide",
-     * "offer_fight", "decline_guide", "accept_tame", "open_shop").
+     * "offer_fight", "decline_guide", "accept_tame").
      * isCompanion is the Postgres-backed taming truth (taming.py),
      * resent on every reply so the plugin's own ephemeral CompanionState
      * can resync after a restart - see CompanionState.java. No built-in
@@ -53,7 +53,7 @@ public class NpcAiBridge implements WebSocket.Listener {
      * it never does). Keyed per-REQUEST rather than per-NPC on purpose -
      * an earlier version keyed this by npcId alone, so two players talking
      * to the same NPC entity concurrently (e.g. both chatting with a single
-     * shared "Elder_Miri") would silently steal each other's handler: the
+     * shared "Adventurer") would silently steal each other's handler: the
      * second player's registration overwrote the first's, so whichever
      * reply arrived later got delivered through the wrong player's
      * callback - one player's private conversation text landing in

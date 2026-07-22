@@ -25,7 +25,7 @@ import java.util.UUID;
  * needs the exact same "who is interacting with me right now" lookup we do.
  *
  * npc_id sent to the orchestrator is the NPC ROLE's name (role.getRoleName(),
- * e.g. "Elder_Miri"), not the spawned entity's own UUID. Roles are spawned
+ * e.g. "Adventurer"), not the spawned entity's own UUID. Roles are spawned
  * fresh with a new random entity UUID every time ("/npc spawn" or a world
  * reload), so keying personality/memory on entity UUID would silently start
  * a brand-new "NPC" from the orchestrator's point of view on every respawn.
@@ -137,14 +137,7 @@ public class TalkToAIAction extends ActionBase {
                     if (isCompanion) {
                         CompanionState.markCompanion(id);
                     }
-                    if ("open_shop".equals(action)) {
-                        // Only queues the request (thread-safe, no Store access
-                        // here) - see PendingShopOpen's javadoc for why the
-                        // actual PageManager call happens later, on the tick
-                        // thread, in OpenShopIfRequestedAction instead of
-                        // directly here.
-                        PendingShopOpen.request(playerUuid);
-                    } else if ("offer_guide".equals(action)) {
+                    if ("offer_guide".equals(action)) {
                         // SeekLandmarkSensor checks this every tick and walks
                         // toward the target NearbyLandmarks resolves,
                         // auto-stopping once arrived - see both classes'

@@ -12,9 +12,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * SeekLandmarkSensor, which also clears this automatically once the NPC
  * arrives - see that class's javadoc.
  *
- * Unlike PendingShopOpen (consume-once), this is persistent while active,
- * same shape as CompanionState - it stays set across many ticks until the
- * NPC arrives (or a caller explicitly stops it).
+ * This is persistent while active, same shape as CompanionState - it stays
+ * set across many ticks until the NPC arrives (or a caller explicitly
+ * stops it).
  *
  * Guide takes priority over companion-follow in every role's Watching
  * Instructions (no Continue on the guide node) - live testing showed that

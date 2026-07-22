@@ -1,5 +1,16 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22: re-scoped to a single NPC (Adventurer only)
+
+Project re-planned around a single NPC. `Elder_Miri.json`, `Merchant_Oskar.json`,
+`AI_Talker.json`, and the shop system only `Merchant_Oskar` used
+(`OpenShopIfRequestedAction`/`Builder`, `PendingShopOpen.java`, the
+`open_shop`/`OPEN_SHOP` action and its shop-availability prompt lines) are
+deleted. Test instructions below now spawn `Adventurer` only. The dated
+entries below this one describe the 4-NPC era as it was actually built and
+tested - left as accurate history, not current state. See CLAUDE.md's
+matching 2026-07-22 entry for the full reasoning.
+
 ## 🎉 2026-07-21: guide-to-landmark confirmed working live, after 5 real bugs found by testing it
 
 The guide-to-landmark feature below (and the companion-follow/combat
@@ -747,7 +758,7 @@ the NPC-talk mechanism - kept only in case it's useful for something else.
 | `manifest.json`, plugin lifecycle, `EventRegistry.registerGlobal` | **Confirmed** — real server boot |
 | `PlayerInteractEvent` fires for NPC clicks | **Confirmed false** — not the mechanism, see above |
 | `NPCPlugin.get().registerCoreComponentType("TalkToAI", ...)` | **Confirmed** — action fires for real |
-| Custom asset packs (`AI_Talker.json`, `Elder_Miri.json`, `Merchant_Oskar.json`) ship, load, and spawn | `AI_Talker` **confirmed live**; the two new characters **compile/boot clean, not yet live-spawned** |
+| Custom asset pack (`Adventurer.json`) ships, loads, and spawns | **Confirmed live** (as of the 4-NPC era's `AI_Talker`/shared code path - `Elder_Miri`/`Merchant_Oskar`/`AI_Talker` deleted 2026-07-22, project is Adventurer-only now, see CLAUDE.md) |
 | Stable per-character `npc_id` (role name, not spawned entity UUID) | Fixed 2026-07-21, **not yet live-verified that trust/memory actually survives a respawn** - the bug it fixes (identity resetting every respawn) was real but silent, so there's no in-game symptom to re-check other than confirming the fix doesn't regress anything |
 | Clicking `AI_Talker` triggers a real dialogue request | **Confirmed live** — repeated orchestrator round trips (Qdrant recall → LLM call → memory write) on each click |
 | Reply reaches the player as a chat message | **Confirmed live** — two real bugs found and fixed along the way: stale captured `PlayerRef` (fixed via `Universe.get().getPlayer(uuid)`) and `NpcAiBridge.extract()` requiring zero-space JSON when Python's `json.dumps()` emits a space (fixed to tolerate whitespace) |
@@ -773,13 +784,14 @@ the NPC-talk mechanism - kept only in case it's useful for something else.
    role").
 4. `/op self` if you haven't already, and `/gamemode adventure` - the NPC
    interact prompt does not appear in Creative mode at all.
-5. `/npc clean` then `/npc spawn AI_Talker` (or `Elder_Miri` /
-   `Merchant_Oskar` - three talkable characters now, see below).
+5. `/npc clean` then `/npc spawn Adventurer` (the project's single NPC as
+   of 2026-07-22 - `Elder_Miri`/`Merchant_Oskar`/`AI_Talker` were deleted,
+   see CLAUDE.md's consolidation entry).
 6. Interact with it (click) - a reply should now appear as a chat message
-   tagged with that character's name (`[Elder Miri] ...`), and typing
-   afterward in normal chat should continue the conversation. Watching
-   `docker compose logs orchestrator -f` at the same time confirms the
-   backend side regardless of what shows up in-game.
+   tagged `[Adventurer] ...`, and typing afterward in normal chat should
+   continue the conversation. Watching `docker compose logs orchestrator -f`
+   at the same time confirms the backend side regardless of what shows up
+   in-game.
 
 ## A real bug found and fixed by actually running this (still applies)
 

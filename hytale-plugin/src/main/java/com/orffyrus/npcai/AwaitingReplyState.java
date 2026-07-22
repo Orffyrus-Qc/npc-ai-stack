@@ -14,9 +14,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * MIN_REPLY_DELAY_S, which keeps a fast LLM response from arriving so
  * quickly there's nothing for the icon to cover.
  *
- * TTL-swept the same way PendingShopOpen/ThreatMemory are - a reply that
- * never arrives (orchestrator restart mid-request, connection drop)
- * shouldn't leave this NPC showing a "thinking" icon forever.
+ * TTL-swept the same way ThreatMemory is - a reply that never arrives
+ * (orchestrator restart mid-request, connection drop) shouldn't leave this
+ * NPC showing a "thinking" icon forever.
  */
 public final class AwaitingReplyState {
 

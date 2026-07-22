@@ -24,14 +24,11 @@ Orchestrator -> plugin:
   {"type": "say", "req_id": "...", "npc_id": "...", "text": "...", "action": "..."}
   # empty text on ambient = skip this tick (GPU busy) - plugin just no-ops
   # "action" is one of llm_client.VALID_ACTIONS ("none", "offer_guide",
-  # "offer_fight", "decline_guide", "accept_tame", "open_shop") - the NPC's
+  # "offer_fight", "decline_guide", "accept_tame") - the NPC's
   # own in-character decision about what to do next (see
   # llm_client.SYSTEM_TEMPLATE's ACTION tag). "accept_tame" has already
-  # been enforced against the 1-tamed-NPC-per-player rule (see taming.py),
-  # and "open_shop" against "this NPC already became someone's companion,
-  # they don't run a shop anymore" (also taming.py), by the time this is
-  # sent - the plugin can act on "open_shop" directly with no further
-  # checks needed. "offer_guide" drives real movement (GuideState/
+  # been enforced against the 1-tamed-NPC-per-player rule (see taming.py)
+  # by the time this is sent. "offer_guide" drives real movement (GuideState/
   # SeekLandmarkSensor in the plugin - walks toward the nearest known
   # landmark, or nearest water if the player's message mentioned it).
   # "offer_fight"/"decline_guide" are still informational only - real
@@ -120,12 +117,11 @@ SKILLS = SkillRuntime(Path(os.environ.get("SANDBOX_DIR", "/sandbox")))
 # single turn.
 MIN_REPLY_DELAY_S = 1.3
 
-# Per-role defaults; move to config/DB as your cast grows.
+# Single-NPC project now (Adventurer only - see CLAUDE.md's 2026-07-22
+# consolidation entry); FALLBACK_BASELINE stays as a generic catch-all for
+# any npc_role string that doesn't match (shouldn't happen in practice with
+# only one role in play, but costs nothing to keep as a safety net).
 DEFAULT_BASELINES: dict[str, Personality] = {
-    "blacksmith": Personality(warmth=0.3, aggression=0.4, humor=0.3, curiosity=0.3),
-    "innkeeper":  Personality(warmth=0.8, aggression=0.1, humor=0.7, curiosity=0.6),
-    "elder":      Personality(warmth=0.6, aggression=0.05, humor=0.2, curiosity=0.5),
-    "merchant":   Personality(warmth=0.55, aggression=0.15, humor=0.5, curiosity=0.45),
     # Bold and quick to trust ("easier to convince to become a companion") -
     # higher starting trust_of_player than the 0.5 default, plus enough
     # aggression to be plausibly willing to actually fight (not just guide).
@@ -173,10 +169,6 @@ async def _build_context(msg: dict) -> NPCContext:
         location_hint=msg.get("situation", ""),
         is_companion=is_companion,
         player_name=msg.get("player_name", ""),
-        # Whether this NPC has left to be ANYONE's companion, not just this
-        # player's - a tamed trader no longer runs a shop for anyone,
-        # regardless of who tamed them. Gates the OPEN_SHOP action below.
-        is_tamed_by_anyone=owner is not None,
     )
 
 
@@ -211,14 +203,6 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
             # mismatch rather than silently pretending the taming worked.
             action = "none"
             text += " (Something holds you back from actually committing to this.)"
-    elif action == "open_shop" and ctx.is_tamed_by_anyone:
-        # Same defense-in-depth as accept_tame above: ctx.is_tamed_by_anyone
-        # was already in the prompt telling the model not to do this, but
-        # enforce the hard rule server-side too rather than trust it always
-        # will. Note the NPC is already gone (not "text += ..." here, since
-        # ctx was already told it has no shop - a stray OPEN_SHOP is a model
-        # slip, not a real request to react to in the reply).
-        action = "none"
 
     logger.info("npc %s (player %s): action=%s tone=%s is_companion=%s",
                 ctx.npc_id, msg.get("player_id", ""), action, tone, ctx.is_companion)

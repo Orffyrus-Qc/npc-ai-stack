@@ -159,6 +159,33 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
   skill_writer.py against the real GPU (only verified with a fake LLM/DB
   so far).
 
+## 2026-07-22: re-scoped to a single NPC (Adventurer only)
+
+User re-planned the whole project around one goal list (Hytale-expert
+dialogue, map/guide, follow-and-fight companion, memory/recognition,
+unresolved-conversation callbacks, and Hytale-wiki internet access - see
+the plan this session executed) and explicitly asked to narrow focus to
+**Adventurer only**. Deleted `Elder_Miri.json`, `Merchant_Oskar.json`,
+`AI_Talker.json`, and the shop system that only `Merchant_Oskar` used
+(`OpenShopIfRequestedAction`/`Builder`, `PendingShopOpen.java`, the
+`OpenShopIfRequested` registration, `open_shop`/`OPEN_SHOP` everywhere in
+`llm_client.py`/`main.py`, `is_tamed_by_anyone`/`SHOP_LINE_*` - all
+shop-gating machinery that had no reason to exist once the only
+shop-running NPC was gone). Trimmed `DEFAULT_BASELINES` to just
+`"adventurer"` + the generic fallback. Confirmed `offer_fight`/
+`decline_guide` remaining "informational only" is intentional (documented
+elsewhere in this file), not dead code left by the deletion - nothing to
+clean up there.
+
+The dated history above (AI_Talker/Elder_Miri/Merchant_Oskar builds and
+bugs) is left as-is - it's an accurate record of what was actually built
+and tested at the time, not current architecture. Going forward, treat
+this project as single-NPC: new features target Adventurer only.
+
+`./gradlew build` clean after the deletion. See the plan's later phases
+(owner-scoped companion, Hytale-expert persona, wiki knowledge base,
+structured unresolved-conversation threads) for what replaces this scope.
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/

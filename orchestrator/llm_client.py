@@ -67,15 +67,12 @@ class NPCContext:
     location_hint: str = ""         # "at the forge, midday"
     is_companion: bool = False      # tamed by the player currently talking (see taming.py)
     player_name: str = ""           # the real player username, not their UUID
-    is_tamed_by_anyone: bool = False  # this NPC has left to be SOMEONE's companion
-                                       # (not necessarily this player's) - distinct from
-                                       # is_companion, and what gates shop access below
 
 
 # Valid values for the ACTION tag the model appends after its spoken line -
 # see build_dialogue_messages(). Kept as a plain set (not an enum) since the
 # model's raw output has to be validated defensively anyway.
-VALID_ACTIONS = {"none", "offer_guide", "offer_fight", "decline_guide", "accept_tame", "open_shop"}
+VALID_ACTIONS = {"none", "offer_guide", "offer_fight", "decline_guide", "accept_tame"}
 
 # Valid values for the TONE tag - see build_dialogue_messages()'s TONE rule.
 # Deliberately named "tone" here, distinct from the wire-protocol/
@@ -115,18 +112,6 @@ COMPANION_LINE = (
     "etc.) in your spoken line.\n"
 )
 
-SHOP_LINE_AVAILABLE = (
-    "\nIf this player asks to see your wares, browse, or buy/sell something, "
-    "and you're still running your stall (see below), that's a normal request - "
-    "react warmly and use the OPEN_SHOP action for it.\n"
-)
-SHOP_LINE_UNAVAILABLE = (
-    "\nYou no longer run a shop or carry trade goods - you left that behind "
-    "when you became someone's companion. If asked to see your wares or trade, "
-    "decline warmly in character (you're not selling anymore); never use "
-    "OPEN_SHOP.\n"
-)
-
 SYSTEM_TEMPLATE = """You are {name}, a {role} in a fantasy world. You are an NPC \
 speaking to a player in-game named {player_name}. Use their name naturally in \
 conversation once you've spoken with them a little (not every single line) - \
@@ -159,9 +144,9 @@ Vary your wording, add a new detail, or react to the fact that the player is bac
 again instead.
 - After your spoken line, on a new line, output exactly one tag deciding what \
 you want to do next: "ACTION: NONE", "ACTION: OFFER_GUIDE", "ACTION: OFFER_FIGHT", \
-"ACTION: DECLINE_GUIDE", "ACTION: ACCEPT_TAME", or "ACTION: OPEN_SHOP". These only \
+"ACTION: DECLINE_GUIDE", or "ACTION: ACCEPT_TAME". These only \
 apply if the player just asked you to be led TO A SPECIFIC PLACE, help against a \
-threat, become their tamed companion, or see your wares/trade - otherwise always \
+threat, or become their tamed companion - otherwise always \
 use NONE.
 - OFFER_GUIDE/DECLINE_GUIDE mean YOU physically walk to a place and the player is \
 expected to follow YOU - only use either one if the player named or clearly implied \
@@ -184,8 +169,7 @@ you personally is actually unmistakable, not just "not perfectly polite".
 - If asked to help against a hostile creature (including one mentioned in your \
 current situation below) or to lead the player to a specific place (not simply to \
 follow/accompany them - see above): decide for yourself, weighing your own \
-courage/aggression, your trust in this player, and your role \
-(a merchant tied to their post is a very different case from a bold adventurer) \
+courage/aggression and your trust in this player, \
 whether you'd (a) actually fight alongside them - OFFER_FIGHT, (b) lead them \
 there but leave the fighting to them - OFFER_GUIDE, or (c) refuse entirely - \
 DECLINE_GUIDE. Concretely: if your temperament above says you avoid danger and \
@@ -196,8 +180,7 @@ fights (or actively seeks a fight) AND you have real trust in this player - \
 being sociable or warm is not the same as being willing to risk your life in \
 combat, don't confuse the two.
 - ACCEPT_TAME only if the player asked you to become their tamed companion and \
-your trust in them is high enough that you'd truly agree.
-{shop_line}"""
+your trust in them is high enough that you'd truly agree."""
 
 
 # Capping facts/memories by *count* alone (MAX_FACTS_COMPANION etc. above)
@@ -227,7 +210,6 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
     # least-relevant entries first.
     facts_list = list(ctx.semantic_facts[:max_facts])
     memories_list = list(ctx.recent_memories[:max_memories])
-    shop_line = SHOP_LINE_UNAVAILABLE if ctx.is_tamed_by_anyone else SHOP_LINE_AVAILABLE
     location_line = f"Current situation: {ctx.location_hint}" if ctx.location_hint else ""
     companion_line = COMPANION_LINE if ctx.is_companion else ""
 
@@ -243,7 +225,6 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
             companion_line=companion_line,
             facts=facts,
             memories=memories,
-            shop_line=shop_line,
         )
 
     system = render()

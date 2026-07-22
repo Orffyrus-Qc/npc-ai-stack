@@ -8,8 +8,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * the 1-tamed-NPC-per-player rule by then - see taming.py - so no further
  * validation is needed client-side). Read every tick by IsCompanionSensor
  * to gate the "Seek" BodyMotion that makes a companion follow the player -
- * see Adventurer.json/Elder_Miri.json/Merchant_Oskar.json/AI_Talker.json's
- * Watching state.
+ * see Adventurer.json's Watching state.
  *
  * Unlike PendingShopOpen (consume-once), this is a persistent flag: once a
  * companion, always a companion for the rest of that entity's lifetime.

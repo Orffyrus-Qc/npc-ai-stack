@@ -130,9 +130,7 @@ public class PlayerChatToAIListener {
                     if (isCompanion) {
                         CompanionState.markCompanion(id);
                     }
-                    if ("open_shop".equals(action)) {
-                        PendingShopOpen.request(playerUuid);
-                    } else if ("offer_guide".equals(action)) {
+                    if ("offer_guide".equals(action)) {
                         GuideState.startGuiding(id, guideTargetFor(content));
                     }
                 });
