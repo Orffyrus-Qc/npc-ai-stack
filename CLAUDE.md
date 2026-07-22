@@ -721,6 +721,93 @@ live-confirmed (needs a real test: tame it, walk far away including
 around obstacles/corners, and separately test a >100-block jump to
 confirm the teleport catch-up actually fires and settles cleanly).
 
+## 2026-07-22, later still: real keyword-based map search, wait-for-player pacing, combat-avoidance while guiding
+
+User: "npc know the map and can lead me trough the map to find what I need.
+NPC must be able to move and wait for me before to continue when he show
+me something. When npc been asked to lead. player will follow, npc will
+avoid fight by ajusting his path." Three sub-features, all grounded in
+real engine mechanisms found before implementing, not guessed.
+
+**Part 1 - real keyword-based destination search.** The old guide system
+only had 2 hardcoded destinations (nearest discoverable zone, or nearest
+Ocean/Shore if the raw player chat text matched 1 of 9 hardcoded water
+words) - it couldn't answer "take me to a desert" or "find the temple" at
+all. Found a SECOND real search mechanism to build on, beyond the zone
+search already used: `PrefabSearchUtil`/`LocatePrefabCommand` (the same
+one backing the built-in `/locate prefab` command) - confirmed via
+disassembly that `ChunkGenerator.getUniquePrefabs(seed)` returns every
+real, unique world-gen structure (temples, ruins, stone circles) with a
+name and position, independent of the zone-pattern system. `PrefabSearchUtil`
+itself is package-private and unreachable from this plugin's package (and
+its own name-match is exact, not substring), so `NearbyLandmarks.
+closestNamedPosition()` calls `getUniquePrefabs()` directly with its own
+case-insensitive substring match, combined with a keyword-matched zone
+search (same mechanism as the existing water search, generalized beyond
+"contains Ocean/Shore" to "contains the requested keyword"), returning
+whichever of the two is closer. Stated plainly, not silently overpromised:
+this only ever finds ZONES and STRUCTURES, not specific resources ("find
+me some iron") - ore placement is a per-chunk block-generation concern
+with no equivalent lightweight search mechanism to hook into.
+
+The keyword itself comes from the model, not further Java-side text
+sniffing: extended `llm_client.py`'s tag system with `GUIDE_TARGET: <word>`
+(same free-text shape as THREAD_SUMMARY), only meaningful when
+ACTION is OFFER_GUIDE. `GuideState.Target` gained a `NAMED` variant
+carrying the keyword alongside the existing `NEAREST_LANDMARK`/
+`NEAREST_WATER`; a new `GuideState.startGuidingFromKeyword()` maps the
+model's keyword to the right call (`"water"` still special-cased to
+`NEAREST_WATER`'s own wider search radius, empty/`"landmark"` falls back
+to the original default) so both real trigger sites
+(`TalkToAIAction`/`PlayerChatToAIListener`) share one mapping instead of
+duplicating it. This fully replaces `PlayerChatToAIListener`'s old
+9-word `WATER_KEYWORDS` Java-side substring match - removed entirely,
+since the model already has to understand the request to decide
+OFFER_GUIDE in the first place, so it can extract a far richer keyword
+than a fixed water-or-not binary ever could. Wire protocol gained a new
+`guide_target` field; `NpcAiBridge.SayHandler` widened to carry it
+through (5 params now, up from 4).
+
+**Part 2 - wait for the player.** New node in the Watching state's guide
+tier: if actively guiding AND the owner has fallen outside 15 blocks
+(same owner-scoped `Player`+`IsOwner` Filter the normal follow logic
+already uses), `BodyMotion: Nothing` instead of continuing to seek the
+destination - the companion pauses in place rather than dragging the
+player along at whatever pace the search happens to want. Self-limiting
+by construction, same shape as the teleport-catchup fix earlier today:
+the moment the owner catches back up, this stops matching and falls
+through to the normal seek node below, no separate "resume" logic needed.
+
+**Part 3 - avoid combat while guiding, adjust path.** Previously combat
+(melee/chase) was positioned ABOVE the guide node with no `Continue`, so
+a hostile in range would make the companion abandon an active guide to
+fight. Restructured priority: the entire guide tier now sits ABOVE
+melee/chase, so a companion never engages combat at all while guiding.
+For "adjusting his path" specifically (not just "don't stop to fight"),
+found a real, shipped `"Type": "Flee"` BodyMotion (`StopDistance`/
+`SlowDownDistance`/`Falloff` params) - the only place it's demonstrated
+in vanilla content is `Test_Walk_Flee.json`. New node: if guiding AND a
+hostile is genuinely close (8 blocks, tighter than the normal 30-block
+threat-detection range so routine guiding isn't constantly interrupted by
+something nowhere near the path), `Flee` instead of continuing toward the
+destination - once clear, falls through to the normal seek node
+automatically, same self-limiting shape as the other new nodes today.
+
+Boot-tested via a real `./gradlew runServer` boot: `Validation
+complete.`, `Loaded 974 NPC configurations, Generic: 1`, `Hytale Server
+Booted!` - no errors tied to the new `Flee` BodyMotion, the priority
+reordering, or the wire-protocol/`SayHandler` signature widening.
+Verified the parser/prompt-render changes directly (a small regression
+battery covering GUIDE_TARGET extraction, the action-gating that only
+honors it when ACTION is OFFER_GUIDE, and the existing trailing-
+hallucination-truncation fix from earlier today, all still correct
+together). Checked process safety again before cleanup - only the Gradle
+daemon was running. Jar rebuilt and reinstalled, orchestrator redeployed.
+Not yet live-confirmed (needs a real test: ask for something specific
+like "take me to a desert"/"find the temple", fall behind deliberately
+during a guide to see it wait, and put a hostile in the path to see it
+route around rather than fight).
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/

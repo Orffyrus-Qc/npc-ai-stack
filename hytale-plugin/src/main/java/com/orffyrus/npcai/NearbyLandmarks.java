@@ -10,6 +10,7 @@ import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import com.hypixel.hytale.server.core.universe.world.worldgen.IWorldGen;
 import com.hypixel.hytale.server.worldgen.chunk.ChunkGenerator;
+import com.hypixel.hytale.server.worldgen.container.UniquePrefabContainer;
 import com.hypixel.hytale.server.worldgen.zone.Zone;
 import com.hypixel.hytale.server.worldgen.zone.ZoneGeneratorResult;
 import org.joml.Vector3d;
@@ -72,6 +73,17 @@ public final class NearbyLandmarks {
      */
     private static final Map<String, Vector3i> CLOSEST_WATER_POSITION = new ConcurrentHashMap<>();
     private static final Vector3i NO_WATER_FOUND = new Vector3i(Integer.MIN_VALUE, Integer.MIN_VALUE, Integer.MIN_VALUE);
+
+    /** Named/keyword search radius - wider than SEARCH_RADIUS since a
+     * specific keyword (e.g. "temple") is sparser than "any discoverable
+     * zone at all", same reasoning as WATER_SEARCH_RADIUS. */
+    private static final int NAMED_SEARCH_RADIUS = 2000;
+    /** Keyed by "npcId|keyword" (lowercased) - a fresh cache slot per
+     * distinct keyword asked of a given NPC, same never-recompute
+     * reasoning as CLOSEST_POSITION (this NPC's position is fixed, so a
+     * given keyword's answer never changes once found). */
+    private static final Map<String, Vector3i> CLOSEST_NAMED_POSITION = new ConcurrentHashMap<>();
+    private static final Vector3i NO_NAMED_FOUND = new Vector3i(Integer.MIN_VALUE, Integer.MIN_VALUE, Integer.MIN_VALUE);
 
     private NearbyLandmarks() { }
 
@@ -163,6 +175,106 @@ public final class NearbyLandmarks {
                 }
             }
         }
+        return best;
+    }
+
+    /**
+     * Nearest real place matching a free-text keyword the LLM extracted from
+     * what the player actually asked for (see llm_client.py's GUIDE_TARGET
+     * tag) - e.g. "temple", "desert", "cave", "ruins". Searches TWO real,
+     * separate world-gen search spaces and returns whichever hit is closer:
+     *
+     * 1. Discoverable zones (same as describe()/compute() above, but
+     *    keyword-matched instead of "any of them") - biome regions and
+     *    named landmarks.
+     * 2. Unique world-gen PREFABS (actual structures - temples, ruins,
+     *    stone circles) - a real, separate mechanism confirmed via
+     *    disassembly of PrefabSearchUtil/LocatePrefabCommand (the same one
+     *    backing the built-in "/locate prefab" command). Written directly
+     *    against ChunkGenerator.getUniquePrefabs(seed) rather than calling
+     *    PrefabSearchUtil itself - that class is package-private
+     *    (com.hypixel.hytale.builtin.locate.command) and unreachable from
+     *    this plugin's own package, and its own name-match is an EXACT
+     *    (case-insensitive) match anyway, not the substring search a
+     *    free-text player keyword needs.
+     *
+     * Known limitation, stated plainly rather than silently overpromised:
+     * this only ever finds ZONES and STRUCTURES, not specific resources
+     * (e.g. "find me some iron") - ore/resource placement is a per-chunk
+     * block-generation concern, not a zone-pattern or unique-prefab one,
+     * and there is no equivalent lightweight "nearest X ore" search
+     * mechanism in this engine to hook into the way there is for zones and
+     * prefabs.
+     */
+    public static Vector3i closestNamedPosition(String npcId, String keyword,
+                                                 Ref<EntityStore> npcRef, Store<EntityStore> store) {
+        String cacheKey = npcId + "|" + keyword.toLowerCase();
+        Vector3i result = CLOSEST_NAMED_POSITION.computeIfAbsent(cacheKey, k -> {
+            try {
+                Vector3i pos = computeNamed(npcRef, store, keyword);
+                return pos != null ? pos : NO_NAMED_FOUND;
+            } catch (Exception e) {
+                LOGGER.atWarning().log("NearbyLandmarks named search failed for " + npcId
+                        + " (" + keyword + "): " + e);
+                return NO_NAMED_FOUND;
+            }
+        });
+        return result == NO_NAMED_FOUND ? null : result;
+    }
+
+    private static Vector3i computeNamed(Ref<EntityStore> npcRef, Store<EntityStore> store, String keyword) {
+        TransformComponent tc = store.getComponent(npcRef, TransformComponent.getComponentType());
+        if (tc == null) return null;
+        WorldChunk chunk = tc.getChunk();
+        if (chunk == null) return null;
+        World world = chunk.getWorld();
+        if (world == null) return null;
+        IWorldGen gen = world.getChunkStore().getGenerator();
+        if (!(gen instanceof ChunkGenerator cg)) return null;
+
+        Vector3d pos = tc.getPosition();
+        int x = (int) pos.x, z = (int) pos.z;
+        int seed = (int) world.getWorldConfig().getSeed();
+        String needle = keyword.toLowerCase();
+
+        Vector3i best = null;
+        long bestDistSq = Long.MAX_VALUE;
+
+        for (Zone zone : cg.getZonePatternProvider().getZones()) {
+            String zoneName = zone.name();
+            String displayName = zone.discoveryConfig() != null ? zone.discoveryConfig().zone() : null;
+            boolean matches = zoneName.toLowerCase().contains(needle)
+                    || (displayName != null && displayName.toLowerCase().contains(needle));
+            if (!matches) continue;
+            Vector3i hit = SpiralSearchUtil.search(cg, seed, x, z, NAMED_SEARCH_RADIUS,
+                    zbr -> {
+                        ZoneGeneratorResult zr = zbr.getZoneResult();
+                        return zr != null && zr.getZone() != null && zoneName.equals(zr.getZone().name());
+                    });
+            if (hit != null) {
+                long dx = hit.x - x, dz = hit.z - z;
+                long distSq = dx * dx + dz * dz;
+                if (distSq < bestDistSq) {
+                    bestDistSq = distSq;
+                    best = new Vector3i(hit.x, cg.getHeight(seed, hit.x, hit.z), hit.z);
+                }
+            }
+        }
+
+        UniquePrefabContainer.UniquePrefabEntry[] prefabs = cg.getUniquePrefabs(seed);
+        if (prefabs != null) {
+            for (UniquePrefabContainer.UniquePrefabEntry entry : prefabs) {
+                if (!entry.getName().toLowerCase().contains(needle)) continue;
+                Vector3i epos = entry.getPosition();
+                long dx = epos.x - x, dz = epos.z - z;
+                long distSq = dx * dx + dz * dz;
+                if (distSq < bestDistSq) {
+                    bestDistSq = distSq;
+                    best = epos;
+                }
+            }
+        }
+
         return best;
     }
 

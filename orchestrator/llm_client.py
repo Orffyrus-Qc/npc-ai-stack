@@ -101,6 +101,8 @@ class DialogueResult:
     tone: str = "neutral"        # one of VALID_TONES - see main.py for handling
     thread_action: str = "none"  # one of VALID_THREAD_ACTIONS - see main.py/threads.py
     thread_summary: str = ""     # only meaningful when thread_action == "open"
+    guide_target: str = ""       # only meaningful when action == "offer_guide" - see
+                                  # main.py/GuideState.java's NAMED target
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +204,12 @@ tamed companion already follows the player automatically with no tag needed, so 
 NONE. This distinction matters mechanically, not just narratively - tagging \
 OFFER_GUIDE here sends you walking AWAY from the player toward the nearest known \
 landmark instead of staying at their side, the opposite of what "follow me" asked for.
+- If ACTION is OFFER_GUIDE, also output another line, "GUIDE_TARGET: " followed by \
+a short keyword for what kind of place the player actually wants to find - e.g. \
+"water", "desert", "temple", "cave", "ruins", "forest". Extract this from what \
+they said even if you're not sure of the exact real place name; a rough keyword is \
+enough to search by. If they just said something generic like "take me somewhere \
+interesting" with no real destination in mind, use "GUIDE_TARGET: landmark".
 - Also output a second tag, on its own line, judging how the player treated \
 YOU personally in THIS message only (not their history, not the world) - \
 "TONE: KIND", "TONE: RUDE", or "TONE: NEUTRAL". KIND means real warmth, \
@@ -313,6 +321,8 @@ _THREAD_TAG_RE = re.compile(r"\s*THREAD:\s*([A-Z_]+)\.?", re.IGNORECASE)
 # of line only (non-greedy, stops at the first newline) so a THREAD_SUMMARY
 # accidentally followed by more text on later lines doesn't get swallowed.
 _THREAD_SUMMARY_TAG_RE = re.compile(r"\s*THREAD_SUMMARY:\s*(.+?)\s*(?:\n|$)", re.IGNORECASE)
+# Same free-text shape as THREAD_SUMMARY - see its comment.
+_GUIDE_TARGET_TAG_RE = re.compile(r"\s*GUIDE_TARGET:\s*(.+?)\s*(?:\n|$)", re.IGNORECASE)
 
 
 def _parse_dialogue_response(raw: str) -> DialogueResult:
@@ -346,6 +356,7 @@ def _parse_dialogue_response(raw: str) -> DialogueResult:
     tone = "neutral"
     thread_action = "none"
     thread_summary = ""
+    guide_target = ""
     tag_start = len(raw)
 
     m = _ACTION_TAG_RE.search(raw)
@@ -354,6 +365,11 @@ def _parse_dialogue_response(raw: str) -> DialogueResult:
         candidate = m.group(1).strip().lower()
         if candidate in VALID_ACTIONS:
             action = candidate
+    if action == "offer_guide":
+        m = _GUIDE_TARGET_TAG_RE.search(raw)
+        if m:
+            tag_start = min(tag_start, m.start())
+            guide_target = m.group(1).strip().strip('"').strip().lower()
     m = _TONE_TAG_RE.search(raw)
     if m:
         tag_start = min(tag_start, m.start())
@@ -378,7 +394,8 @@ def _parse_dialogue_response(raw: str) -> DialogueResult:
 
     text = raw[:tag_start].strip().strip('"').strip()
     return DialogueResult(text=text, action=action, tone=tone,
-                           thread_action=thread_action, thread_summary=thread_summary)
+                           thread_action=thread_action, thread_summary=thread_summary,
+                           guide_target=guide_target)
 
 
 # ---------------------------------------------------------------------------

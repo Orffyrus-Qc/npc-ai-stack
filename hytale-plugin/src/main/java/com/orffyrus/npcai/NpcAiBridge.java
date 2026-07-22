@@ -23,16 +23,20 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class NpcAiBridge implements WebSocket.Listener {
 
-    /** (npcId, text, action, isCompanion) - action is one of the
-     * orchestrator's llm_client.VALID_ACTIONS ("none", "offer_guide",
+    /** (npcId, text, action, isCompanion, guideTarget) - action is one of
+     * the orchestrator's llm_client.VALID_ACTIONS ("none", "offer_guide",
      * "offer_fight", "decline_guide", "accept_tame").
      * isCompanion is the Postgres-backed taming truth (taming.py),
      * resent on every reply so the plugin's own ephemeral CompanionState
-     * can resync after a restart - see CompanionState.java. No built-in
-     * java.util.function type takes four args, hence this. */
+     * can resync after a restart - see CompanionState.java. guideTarget
+     * (added 2026-07-22) is only meaningful when action=="offer_guide" - a
+     * short keyword the model extracted from what the player asked for
+     * ("temple", "desert", "water", ...), empty string if none/not
+     * applicable - see GuideState.Target.NAMED. No built-in
+     * java.util.function type takes five args, hence this. */
     @FunctionalInterface
     public interface SayHandler {
-        void onSay(String npcId, String text, String action, boolean isCompanion);
+        void onSay(String npcId, String text, String action, boolean isCompanion, String guideTarget);
     }
 
     /** How long an in-flight request's handler is kept waiting for a reply
@@ -205,6 +209,7 @@ public class NpcAiBridge implements WebSocket.Listener {
         String text = extract(json, "text");
         String action = extract(json, "action");
         boolean isCompanion = extractBoolean(json, "is_companion");
+        String guideTarget = extract(json, "guide_target");
         if (reqId == null || npcId == null) return;
         // One-shot: remove() instead of get() so a reply can never be
         // delivered twice and a stale/duplicate message can't resurrect an
@@ -222,7 +227,8 @@ public class NpcAiBridge implements WebSocket.Listener {
             //
             // IMPORTANT: hop back onto the game/entity thread before touching
             // world state - this callback arrives on the websocket thread.
-            pending.handler().onSay(npcId, text, action != null ? action : "none", isCompanion);
+            pending.handler().onSay(npcId, text, action != null ? action : "none", isCompanion,
+                    guideTarget != null ? guideTarget : "");
         }
     }
 

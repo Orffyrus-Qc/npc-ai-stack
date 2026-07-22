@@ -227,7 +227,65 @@
               ]
             },
             {
-              "$Comment": "Companion combat, melee range: once tamed, if a hostile is locked as Target and close enough, attack it. Real \"Attack\" action (confirmed via disassembly of BuilderActionAttack, and via real shipped usage in Component_Instruction_Attack_Sequence_Spirit.json/Component_Instruction_Intelligent_Idle_Goblin.json) - \"Root_NPC_Attack_Melee\" is the same generic melee attack pattern the real, shipped Tamed_Cow.json uses, not a made-up interaction id. This node has no Continue, so it takes priority over chasing/following below whenever it matches.",
+              "$Comment": "Guiding, avoid danger: hostile very close while actively guiding - back away rather than engage or blindly walk toward it. Real, shipped 'Flee' BodyMotion (confirmed via the real, shipped Test_Walk_Flee.json - the only place this engine's Flee type is demonstrated; StopDistance/SlowDownDistance/Falloff match that test file's own values). 2026-07-22, added for \"npc will avoid fight by ajusting his path\" while guiding: this whole guide tier is now positioned ABOVE the melee/chase combat nodes below (previously combat came first and would abandon an active guide to fight) - a tamed companion never engages combat at all while guiding, full stop. This specific node only fires when a hostile is genuinely close (8 blocks) rather than merely detected somewhere within the normal 30-block threat-detection range, so routine guiding isn't constantly interrupted by a hostile that's nowhere near the path. Once the hostile is no longer within 8 blocks, this stops matching and falls through to the normal seek-toward-destination node below - the companion resumes its route automatically, no separate 'resume' logic needed.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "SeekLandmark" },
+                  {
+                    "Type": "Mob",
+                    "Range": 8,
+                    "GetPlayers": false,
+                    "GetNPCs": true,
+                    "Filters": [
+                      { "Type": "IsHostileSpecies" }
+                    ]
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Flee",
+                "StopDistance": 10,
+                "SlowDownDistance": 6,
+                "Falloff": 3
+              }
+            },
+            {
+              "$Comment": "Guiding, wait for the player: pause rather than beeline ahead if the owner has fallen behind, instead of dragging them along at whatever pace the destination search happens to want. 2026-07-22, added for \"npc must be able to move and wait for me... before to continue\": gated on the same owner-scoped Player+IsOwner sensor the normal follow logic already uses. Once the owner catches back up (within 15 blocks), this stops matching and falls through to the normal seek-toward-destination node below - resumes automatically, same self-limiting shape as the flee node above.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "SeekLandmark" },
+                  {
+                    "Type": "Not",
+                    "Sensor": {
+                      "Type": "Player",
+                      "Range": 15,
+                      "Filters": [
+                        { "Type": "IsOwner" }
+                      ]
+                    }
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Nothing"
+              }
+            },
+            {
+              "$Comment": "Guiding: the AI decided OFFER_GUIDE (see llm_client.py) and GuideState.startGuiding()/startGuidingFromKeyword() was called - walk toward NearbyLandmarks.closestPosition()/closestNamedPosition() until SeekLandmarkSensor reports arrival (it stops matching automatically, no separate arrival check needed here). 2026-07-22: this whole guide tier (this node plus the flee/wait nodes above) now takes priority over BOTH combat (melee/chase below) and merely following the player - a companion never abandons an active guide to fight, and only pauses (see the wait node above) rather than skipping ahead when the owner falls behind.",
+              "Sensor": {
+                "Type": "SeekLandmark"
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 1,
+                "StopDistance": 2,
+                "RelaxedMoveConstraints": false
+              }
+            },
+            {
+              "$Comment": "Companion combat, melee range: once tamed, if a hostile is locked as Target and close enough, attack it. Real \"Attack\" action (confirmed via disassembly of BuilderActionAttack, and via real shipped usage in Component_Instruction_Attack_Sequence_Spirit.json/Component_Instruction_Intelligent_Idle_Goblin.json) - \"Root_NPC_Attack_Melee\" is the same generic melee attack pattern the real, shipped Tamed_Cow.json uses, not a made-up interaction id. This node has no Continue, so it takes priority over chasing/following below whenever it matches - but the guide tier above it now wins outright whenever actively guiding (see those nodes' $Comments), so this never fires mid-guide.",
               "Sensor": {
                 "Type": "And",
                 "Sensors": [
@@ -250,7 +308,7 @@
               }
             },
             {
-              "$Comment": "Companion combat, chase: hostile locked as Target but not yet in melee range - close the distance. Takes priority over following the player (no Continue) whenever a hostile is being chased. HeadMotion:Watch added 2026-07-22 alongside the fix above that stops the player-watch node from competing during combat - watches the locked hostile (same Target sensor context the melee block below already uses for its own HeadMotion:Watch) so the companion visibly looks at what it's charging toward instead of having no head motion at all.",
+              "$Comment": "Companion combat, chase: hostile locked as Target but not yet in melee range - close the distance. Takes priority over following the player (no Continue) whenever a hostile is being chased - but, like melee above, never fires mid-guide since the guide tier is now positioned earlier. HeadMotion:Watch added 2026-07-22 alongside the fix above that stops the player-watch node from competing during combat - watches the locked hostile (same Target sensor context the melee block above already uses for its own HeadMotion:Watch) so the companion visibly looks at what it's charging toward instead of having no head motion at all.",
               "Sensor": {
                 "Type": "And",
                 "Sensors": [
@@ -260,18 +318,6 @@
               },
               "HeadMotion": {
                 "Type": "Watch"
-              },
-              "BodyMotion": {
-                "Type": "Seek",
-                "RelativeSpeed": 1,
-                "StopDistance": 2,
-                "RelaxedMoveConstraints": false
-              }
-            },
-            {
-              "$Comment": "Guiding: the AI decided OFFER_GUIDE (see llm_client.py) and GuideState.startGuiding() was called - walk toward NearbyLandmarks.closestPosition() until SeekLandmarkSensor reports arrival (it stops matching automatically, no separate arrival check needed here). Takes priority over merely following the player (no Continue), but combat above still wins if a hostile is being fought/chased.",
-              "Sensor": {
-                "Type": "SeekLandmark"
               },
               "BodyMotion": {
                 "Type": "Seek",

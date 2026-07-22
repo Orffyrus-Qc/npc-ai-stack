@@ -1,5 +1,45 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: real keyword map search, wait-for-player pacing, combat-avoidance while guiding
+
+Requested: "npc know the map and can lead me... to find what I need," a
+wait-for-player pacing behavior, and "avoid fight by ajusting his path"
+while guiding. Three parts, each grounded in a real engine mechanism.
+
+**Real destination search, not 2 hardcoded buckets.** Found
+`ChunkGenerator.getUniquePrefabs(seed)` (the same mechanism behind the
+built-in `/locate prefab` command) - every real unique structure (temple,
+ruins, stone circle) with a name and position, separate from the
+zone-pattern system already used for biome regions. New
+`NearbyLandmarks.closestNamedPosition()` searches both (zone names AND
+prefab names, keyword-matched) and returns whichever is closer. Honest
+limitation: this only finds zones/structures, not specific resources -
+ore placement has no equivalent lightweight search mechanism to hook
+into. The keyword itself now comes from the model (`llm_client.py`'s new
+`GUIDE_TARGET` tag, same shape as `THREAD_SUMMARY`) instead of a
+hardcoded 9-word Java-side substring match, which is removed entirely -
+`GuideState` gained a `NAMED` target variant and
+`startGuidingFromKeyword()` to map it. `NpcAiBridge.SayHandler` widened
+to carry the new `guide_target` field through (5 params, up from 4).
+
+**Wait for the player.** New node: if actively guiding and the owner has
+fallen outside 15 blocks, pause instead of continuing toward the
+destination - self-limiting by construction (the moment they catch up,
+this stops matching and normal seeking resumes automatically).
+
+**Avoid combat while guiding, adjust path.** The whole guide tier is now
+positioned ABOVE combat (previously the reverse - a hostile in range
+would abandon an active guide to fight). For actually adjusting path
+rather than just not stopping, found a real, shipped `"Type": "Flee"`
+BodyMotion (`Test_Walk_Flee.json` is the only vanilla demonstration) -
+if guiding and a hostile gets genuinely close (8 blocks), flee instead of
+continuing toward the destination; clears automatically once safe.
+
+Boot-tested via a real `./gradlew runServer` boot - clean validation, no
+errors tied to the new `Flee` BodyMotion, priority reordering, or the
+wire-protocol/`SayHandler` signature change. Jar rebuilt and reinstalled,
+orchestrator redeployed. Not yet live-confirmed.
+
 ## 2026-07-22, later still: companion must always know where its owner is, always follow
 
 Requested: "tamed npc compagnon must always know where I am and always

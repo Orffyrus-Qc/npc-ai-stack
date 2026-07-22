@@ -62,9 +62,15 @@ public class SeekLandmarkSensor extends SensorBase {
             GuideState.stopGuiding(npcId);
             return false;
         }
-        Vector3i target = mode == GuideState.Target.NEAREST_WATER
-                ? NearbyLandmarks.closestWaterPosition(npcId, ref, store)
-                : NearbyLandmarks.closestPosition(npcId);
+        Vector3i target;
+        if (mode == GuideState.Target.NEAREST_WATER) {
+            target = NearbyLandmarks.closestWaterPosition(npcId, ref, store);
+        } else if (mode == GuideState.Target.NAMED) {
+            String keyword = GuideState.getKeyword(npcId);
+            target = keyword != null ? NearbyLandmarks.closestNamedPosition(npcId, keyword, ref, store) : null;
+        } else {
+            target = NearbyLandmarks.closestPosition(npcId);
+        }
         if (target == null) {
             LOGGER.atInfo().log(npcId + " couldn't find a " + mode + " to guide toward - giving up");
             GuideState.stopGuiding(npcId);

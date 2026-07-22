@@ -28,12 +28,6 @@ public class PlayerChatToAIListener {
     private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
 
     private static final Set<String> EXIT_WORDS = Set.of("bye", "goodbye", "exit", "leave", "stop");
-    // See GuideState.Target.NEAREST_WATER's javadoc: Hytale has no discrete
-    // "lake"/"river" zone, only Ocean/Shallow_Ocean/Shore - this just decides
-    // which of the two NearbyLandmarks queries to point the guide at, based
-    // on what the player actually asked for.
-    private static final Set<String> WATER_KEYWORDS =
-            Set.of("lake", "river", "pond", "sea", "ocean", "water", "swim", "shore", "beach");
 
     private final NpcAiBridge bridge;
 
@@ -104,7 +98,7 @@ public class PlayerChatToAIListener {
                 sender.getUsername(),
                 content,
                 fullSituation,
-                (id, text, action, isCompanion) -> {
+                (id, text, action, isCompanion, guideTarget) -> {
                     // Same staleness concern as TalkToAIAction: this fires on
                     // the WebSocket thread after the real LLM round trip, so
                     // re-resolve a fresh PlayerRef from the UUID instead of
@@ -131,20 +125,19 @@ public class PlayerChatToAIListener {
                         CompanionState.markCompanion(id, playerUuid);
                     }
                     if ("offer_guide".equals(action)) {
-                        GuideState.startGuiding(id, guideTargetFor(content));
+                        // 2026-07-22: uses the model's own GUIDE_TARGET
+                        // keyword now (see GuideState.startGuidingFromKeyword's
+                        // javadoc) instead of a hardcoded 9-word
+                        // WATER_KEYWORDS substring match against the raw
+                        // player text - the model already has to understand
+                        // what the player asked for to decide OFFER_GUIDE
+                        // in the first place, so it can extract a much
+                        // richer keyword ("temple", "desert", "cave", ...)
+                        // than a fixed water-or-not binary ever could.
+                        GuideState.startGuidingFromKeyword(id, guideTarget);
                     }
                 });
 
         return event;
-    }
-
-    private static GuideState.Target guideTargetFor(String playerText) {
-        String lower = playerText.toLowerCase();
-        for (String keyword : WATER_KEYWORDS) {
-            if (lower.contains(keyword)) {
-                return GuideState.Target.NEAREST_WATER;
-            }
-        }
-        return GuideState.Target.NEAREST_LANDMARK;
     }
 }

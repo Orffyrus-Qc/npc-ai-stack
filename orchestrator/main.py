@@ -38,6 +38,12 @@ Orchestrator -> plugin:
   # plugin sends in may include a live-detected nearby-threat note (see
   # hytale-plugin's ThreatMemory.java) alongside static location info,
   # which is what these three actions typically react to.
+  # "guide_target" (added 2026-07-22) is only meaningful when
+  # action=="offer_guide" - a short keyword the model extracted from what
+  # the player actually asked for ("temple", "desert", "cave", "water",
+  # ...), used by GuideState.Target.NAMED to search real zones/prefabs by
+  # keyword (see NearbyLandmarks.closestNamedPosition()) instead of only
+  # the fixed "nearest landmark"/"nearest water" choice from before.
 
 The plugin should treat every call as async: send the event, keep ticking,
 apply the "say" whenever it arrives. A 200ms-2s delay reads as the NPC
@@ -198,7 +204,7 @@ async def _build_context(msg: dict) -> NPCContext:
     )
 
 
-async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
+async def handle_dialogue(msg: dict) -> tuple[str, str, bool, str]:
     turn_started = time.monotonic()
     ctx = await _build_context(msg)
     raw = await DISPATCHER.request_dialogue(
@@ -294,7 +300,8 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
     # not the plugin's own ephemeral CompanionState) and returned on every
     # single turn - see the wire-send comment in plugin_connection() for why
     # a one-time action=="accept_tame" isn't enough to keep the two in sync.
-    return text, action, ctx.is_companion
+    guide_target = raw.guide_target if isinstance(raw, DialogueResult) else ""
+    return text, action, ctx.is_companion, guide_target
 
 
 async def handle_ambient(msg: dict) -> str:
@@ -374,9 +381,10 @@ async def plugin_connection(ws) -> None:
         mtype = msg.get("type")
         try:
             is_companion = False
+            guide_target = ""
             if mtype == "dialogue":
                 try:
-                    text, action, is_companion = await handle_dialogue(msg)
+                    text, action, is_companion, guide_target = await handle_dialogue(msg)
                 except Exception:
                     # handle_dialogue does its own real work (taming,
                     # personality, memory) beyond just the LLM call, which
@@ -414,6 +422,13 @@ async def plugin_connection(ws) -> None:
                 # no reason to re-decide ACCEPT_TAME for a player it already
                 # considers a companion.
                 "is_companion": is_companion,
+                # Only meaningful when action=="offer_guide" - a short
+                # keyword the model extracted from what the player actually
+                # asked for (see llm_client.py's GUIDE_TARGET rule), used by
+                # GuideState.Target.NAMED/NearbyLandmarks.closestNamedPosition()
+                # to search real zones/prefabs by keyword instead of the old
+                # fixed landmark/water-only choice.
+                "guide_target": guide_target,
             # ensure_ascii=False: 2026-07-22 real bug found live - the model
             # naturally uses em-dashes ("Emerald Wilds—I've got a feeling...")
             # in its dialogue style. json.dumps()'s default ensure_ascii=True

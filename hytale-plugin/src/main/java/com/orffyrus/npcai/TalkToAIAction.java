@@ -102,7 +102,7 @@ public class TalkToAIAction extends ActionBase {
                 playerRef.getUsername(),
                 "(the player approaches and interacts with you)",
                 fullSituation,
-                (id, text, action, isCompanion) -> {
+                (id, text, action, isCompanion, guideTarget) -> {
                     // Fires on the WebSocket thread, ~1-2s after this method
                     // returns (real LLM round trip). The playerRef captured
                     // above may be stale by then, so re-resolve a fresh one
@@ -141,12 +141,18 @@ public class TalkToAIAction extends ActionBase {
                         // SeekLandmarkSensor checks this every tick and walks
                         // toward the target NearbyLandmarks resolves,
                         // auto-stopping once arrived - see both classes'
-                        // javadoc. No real player free-text is available here
-                        // (this fires from a click, not chat - playerText
-                        // above is a canned string), so there's nothing to
-                        // keyword-match for a water request; always the
-                        // generic nearest-landmark mode.
-                        GuideState.startGuiding(id, GuideState.Target.NEAREST_LANDMARK);
+                        // javadoc. 2026-07-22: uses the model's own
+                        // GUIDE_TARGET keyword now (see GuideState.
+                        // startGuidingFromKeyword's javadoc) instead of
+                        // always defaulting to NEAREST_LANDMARK - a
+                        // click-triggered conversation has no real player
+                        // free text to keyword-match on its own, but the
+                        // model can still extract a destination from
+                        // earlier conversation context ("Things YOU
+                        // remember"), and falls back to NEAREST_LANDMARK
+                        // itself (via the empty/"landmark" case) when it
+                        // has nothing specific in mind either.
+                        GuideState.startGuidingFromKeyword(id, guideTarget);
                     }
                 });
 
