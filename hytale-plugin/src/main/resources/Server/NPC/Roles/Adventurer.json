@@ -128,7 +128,7 @@
               ]
             },
             {
-              "$Comment": "Reactive companion defense: real, shipped 'EntityEvent' sensor (EventType: Damage, SearchType: PlayerOnly, NPCGroup: Player - confirmed valid asset at Server/NPC/Groups/Player.json) - confirmed via disassembly of SensorEntityEvent/BuilderSensorEntityEvent AND via its real usage in Server/NPC/Roles/_Core/Components/Steps/Component_Instruction_Allied_Damage_Check.json. Fires the instant a nearby player (the one this NPC is following) takes damage, regardless of whether THIS companion currently has line of sight on whatever's hitting them - the Mob+IsHostileSpecies sensor above only reacts to a hostile the companion can already see/sense itself, which could miss an attacker sneaking up on the player specifically. Combined here with the same Mob+IsHostileSpecies hostile search, just widened to 45 blocks (vs. the normal 30) - we now know for certain a threat is imminent nearby, so it's worth searching harder for it. Uses the same IsHostileSpecies Filter + widened AttitudesByPriority as the block above - see its $Comment for why. Not yet live-confirmed (this whole companion-combat feature has never been tested near a real hostile creature - see hytale-plugin/README.md's \"Known simplification\").",
+              "$Comment": "Reactive companion defense: real, shipped 'EntityEvent' sensor (EventType: Damage, SearchType: PlayerOnly, NPCGroup: Player - confirmed valid asset at Server/NPC/Groups/Player.json) - confirmed via disassembly of SensorEntityEvent/BuilderSensorEntityEvent AND via its real usage in Server/NPC/Roles/_Core/Components/Steps/Component_Instruction_Allied_Damage_Check.json. Fires the instant a nearby player takes damage, regardless of whether THIS companion currently has line of sight on whatever's hitting them - the Mob+IsHostileSpecies sensor above only reacts to a hostile the companion can already see/sense itself, which could miss an attacker sneaking up on a player specifically. Combined here with the same Mob+IsHostileSpecies hostile search, just widened to 45 blocks (vs. the normal 30) - we now know for certain a threat is imminent nearby, so it's worth searching harder for it. Uses the same IsHostileSpecies Filter + widened AttitudesByPriority as the block above - see its $Comment for why. NOT owner-scoped like the two follow blocks below - confirmed via disassembly that BuilderSensorEntityEvent extends BuilderSensorEvent, not BuilderSensorWithEntityFilters, so it has no candidate-iteration/Filters mechanism at all (a slot/subscription check, not an entity search) - there's no candidate Ref here to filter by owner. Documented limitation, not a bug: worst case is widening the hostile-search when a non-owner player is hit nearby; the actual lock/chase/attack target is still gated by IsHostileSpecies regardless, so this can't cause a wrong-target attack. Not yet live-confirmed (this whole companion-combat feature has never been tested near a real hostile creature - see hytale-plugin/README.md's \"Known simplification\").",
               "Continue": true,
               "Sensor": {
                 "Type": "And",
@@ -266,12 +266,18 @@
               }
             },
             {
-              "$Comment": "Companion mode: once tamed, seek toward the nearest player instead of standing still (no hostile currently being fought/chased, and not actively guiding - see the nodes above, which take priority). The Seek/MaintainDistance BodyMotion types are real, shipped engine functionality (confirmed via disassembly and via the real Template_Livestock.json's own tamed-animal follow behavior), not custom pathfinding code. v1 simplification: follows the nearest player, not specifically its owner - correct for solo/small-group testing, would need real owner-specific entity filtering for a populated multiplayer world (see CompanionState.java's javadoc)",
+              "$Comment": "Companion mode: once tamed, seek toward ITS OWNER specifically (no hostile currently being fought/chased, and not actively guiding - see the nodes above, which take priority). The Seek/MaintainDistance BodyMotion types are real, shipped engine functionality (confirmed via disassembly and via the real Template_Livestock.json's own tamed-animal follow behavior), not custom pathfinding code. 2026-07-22: added the \"IsOwner\" Filter (EntityFilterIsOwner.java) to the Player sensor, replacing the earlier v1 simplification that followed the NEAREST player regardless of who actually tamed it - correct only when the owner happened to be nearest (true in all solo testing so far), wrong the moment another player is closer. Confirmed via disassembly that BuilderSensorPlayer extends BuilderSensorEntityBase, the same Filters-supporting base \"Mob\" uses (see EntityFilterHostileSpecies.java for the same pattern). CompanionState now tracks the real owner UUID, not just a companion boolean - see its javadoc.",
               "Sensor": {
                 "Type": "And",
                 "Sensors": [
                   { "Type": "IsCompanion" },
-                  { "Type": "Player", "Range": 30 }
+                  {
+                    "Type": "Player",
+                    "Range": 30,
+                    "Filters": [
+                      { "Type": "IsOwner" }
+                    ]
+                  }
                 ]
               },
               "BodyMotion": {
@@ -323,13 +329,19 @@
               ]
             },
             {
-              "$Comment": "Keep following even while starting a conversation - $Interaction only lasts ~1s before the Timeout below returns to Watching, but without this an established companion visibly freezes for that second every time the player clicks to talk. Continue:true is required here so the Timeout node below still runs every tick regardless of whether this one matches - without it, a nearby companion would get stuck in $Interaction forever.",
+              "$Comment": "Keep following even while starting a conversation - $Interaction only lasts ~1s before the Timeout below returns to Watching, but without this an established companion visibly freezes for that second every time the player clicks to talk. Continue:true is required here so the Timeout node below still runs every tick regardless of whether this one matches - without it, a nearby companion would get stuck in $Interaction forever. Same owner-scoped IsOwner Filter as the Watching state's matching block - see its $Comment for why.",
               "Continue": true,
               "Sensor": {
                 "Type": "And",
                 "Sensors": [
                   { "Type": "IsCompanion" },
-                  { "Type": "Player", "Range": 30 }
+                  {
+                    "Type": "Player",
+                    "Range": 30,
+                    "Filters": [
+                      { "Type": "IsOwner" }
+                    ]
+                  }
                 ]
               },
               "BodyMotion": {

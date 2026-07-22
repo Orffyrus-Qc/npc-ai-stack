@@ -135,7 +135,7 @@ public class TalkToAIAction extends ActionBase {
                     // re-decide ACCEPT_TAME for a player it already considers a
                     // companion).
                     if (isCompanion) {
-                        CompanionState.markCompanion(id);
+                        CompanionState.markCompanion(id, playerUuid);
                     }
                     if ("offer_guide".equals(action)) {
                         // SeekLandmarkSensor checks this every tick and walks

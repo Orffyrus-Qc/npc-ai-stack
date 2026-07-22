@@ -186,6 +186,48 @@ this project as single-NPC: new features target Adventurer only.
 (owner-scoped companion, Hytale-expert persona, wiki knowledge base,
 structured unresolved-conversation threads) for what replaces this scope.
 
+## 2026-07-22, later: owner-scoped companion following (makes "1 per player" real)
+
+Phase 1 of the re-plan: user's goal list asks for a companion that "can
+follow a player and fight with him (max. 1 per player at time)".
+`taming.py` already enforces exactly one owner per NPC at the DB level, but
+the Java-side follow/defend sensors matched the **nearest** player, not
+specifically the owner - `CompanionState`'s own javadoc already flagged
+this as a known v1 simplification. Fine solo (the only scenario tested so
+far); wrong the instant another player is nearer than the actual owner -
+the companion would visibly follow/stay near the wrong person.
+
+Fix: `CompanionState` now tracks the real owner `UUID` per NPC
+(`markCompanion(npcId, ownerId)` / `getOwner(npcId)`), not just a
+companion boolean. New `EntityFilterIsOwner` (+ `Builder`), same shape as
+`EntityFilterHostileSpecies` - resolves the candidate's `PlayerRef` UUID
+and compares it to `CompanionState.getOwner(role.getRoleName())`.
+Registered as `"IsOwner"`. Confirmed via disassembly that
+`BuilderSensorPlayer extends BuilderSensorEntityBase` - the same
+`Filters`-supporting base `Mob` uses - so `"Filters": [{"Type":
+"IsOwner"}]` is valid on the built-in `"Player"` sensor. Added to both of
+`Adventurer.json`'s companion-follow blocks (Watching state and
+`$Interaction` state).
+
+**Deliberately NOT applied to the reactive-defense `EntityEvent` sensor**
+(the widened 45-block hostile search that fires when a nearby player takes
+damage): confirmed via disassembly that `BuilderSensorEntityEvent extends
+BuilderSensorEvent`, not `BuilderSensorWithEntityFilters` - it's a
+slot/subscription check ("did this event type happen nearby"), not an
+entity-iteration sensor, so there's no candidate `Ref` to filter by owner
+there at all. Documented as a real, permanent limitation rather than
+worked around: worst case, the companion widens its hostile-search when a
+non-owner player is hit nearby, but the actual lock/chase/attack target is
+still gated by `IsHostileSpecies` regardless, so this can't cause a
+wrong-target attack - just an occasional unnecessary extra search.
+
+Boot-tested via `./gradlew build` (clean) and a real `./gradlew runServer`
+boot (`Loaded 974 NPC configurations, Generic: 1`, `Validation complete.`,
+`Hytale Server Booted!` - no errors tied to the new `Filters`/`IsOwner`
+additions). Not yet live-confirmed with two real players (needs a second
+connected client to verify the companion follows its actual owner and
+ignores a nearby non-owner).
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/

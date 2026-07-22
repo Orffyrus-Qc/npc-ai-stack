@@ -128,7 +128,7 @@ public class PlayerChatToAIListener {
                     // see the matching comment in TalkToAIAction for why this
                     // can't just ride on action=="accept_tame" alone.
                     if (isCompanion) {
-                        CompanionState.markCompanion(id);
+                        CompanionState.markCompanion(id, playerUuid);
                     }
                     if ("offer_guide".equals(action)) {
                         GuideState.startGuiding(id, guideTargetFor(content));

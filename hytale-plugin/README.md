@@ -11,6 +11,34 @@ entries below this one describe the 4-NPC era as it was actually built and
 tested - left as accurate history, not current state. See CLAUDE.md's
 matching 2026-07-22 entry for the full reasoning.
 
+## 2026-07-22, later: companion now follows its actual owner, not the nearest player
+
+"Max 1 companion per player" was already true at the DB level
+(`taming.py`'s unique-owner constraint), but the Java-side follow/defend
+sensors matched the **nearest** player regardless - `CompanionState`'s own
+javadoc flagged this as a known v1 simplification, fine solo, wrong the
+moment another player is nearer than the real owner. Fixed:
+`CompanionState` now stores the owner's real `UUID`, and a new
+`EntityFilterIsOwner` entity filter (registered as `"IsOwner"`, same shape
+as `EntityFilterHostileSpecies`) restricts both of `Adventurer.json`'s
+companion-follow blocks (Watching + `$Interaction`) to specifically that
+player - confirmed via disassembly that the built-in `"Player"` sensor's
+builder extends the same `Filters`-supporting base `"Mob"` does.
+
+The reactive-defense `EntityEvent` sensor (widened 45-block hostile search
+when a nearby player takes damage) is **not** owner-scoped - confirmed via
+disassembly it has no candidate-iteration/Filters mechanism at all (a
+slot/subscription check, not an entity search). Documented as a permanent,
+harmless limitation: worst case is an extra search triggered by a
+non-owner being hit, not a wrong attack target (still gated by
+`IsHostileSpecies` regardless).
+
+**Boot-tested via a real `./gradlew runServer` boot** - `Loaded 974 NPC
+configurations, Generic: 1`, `Validation complete.`, `Hytale Server
+Booted!`, no errors tied to the new `Filters`/`IsOwner` additions - **not
+yet live-confirmed** (needs two real connected players to verify the
+companion follows its owner and ignores a nearby stranger).
+
 ## 🎉 2026-07-21: guide-to-landmark confirmed working live, after 5 real bugs found by testing it
 
 The guide-to-landmark feature below (and the companion-follow/combat
