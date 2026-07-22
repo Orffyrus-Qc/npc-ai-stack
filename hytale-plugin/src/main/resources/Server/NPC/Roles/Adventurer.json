@@ -251,11 +251,12 @@
               }
             },
             {
-              "$Comment": "Guiding, wait for the player: pause rather than beeline ahead if the owner has fallen behind, instead of dragging them along at whatever pace the destination search happens to want. 2026-07-22, added for \"npc must be able to move and wait for me... before to continue\": gated on the same owner-scoped Player+IsOwner sensor the normal follow logic already uses. Once the owner catches back up (within 15 blocks), this stops matching and falls through to the normal seek-toward-destination node below - resumes automatically, same self-limiting shape as the flee node above.",
+              "$Comment": "Guiding, wait for the player: pause rather than beeline ahead if the owner has fallen behind, instead of dragging them along at whatever pace the destination search happens to want. 2026-07-22, added for \"npc must be able to move and wait for me... before to continue\": gated on the same owner-scoped Player+IsOwner sensor the normal follow logic already uses. Once the owner catches back up (within 15 blocks), this stops matching and falls through to the normal seek-toward-destination node below - resumes automatically, same self-limiting shape as the flee node above. 2026-07-22, later still: added the explicit IsCompanion gate after a real bug found live - offer_guide isn't gated on companion status (any player can ask for directions, not just an owner), so for an UNTAMED npc, IsOwner never matches anyone at all, making \"NOT(owner within 15 blocks)\" vacuously TRUE forever - this node matched every single tick regardless of where the real player stood, and the npc just stood still (BodyMotion:Nothing) for the entire guide, confirmed via the new SeekLandmarkSensor diagnostic logging showing distance stuck at exactly the starting value for 60 straight seconds before giving up. Only a real tamed companion has an owner worth waiting for.",
               "Sensor": {
                 "Type": "And",
                 "Sensors": [
                   { "Type": "SeekLandmark" },
+                  { "Type": "IsCompanion" },
                   {
                     "Type": "Not",
                     "Sensor": {

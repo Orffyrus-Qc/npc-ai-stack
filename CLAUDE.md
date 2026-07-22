@@ -1948,6 +1948,67 @@ failure). **Not yet confirmable from here**: the actual Java-side wiring
 logging reveals a *new* root cause if a guide gets stuck again) - these
 need the user's own next play session.
 
+## 2026-07-22, later still: "what just happen in chat with npc" - the new diagnostic logging immediately paid for itself
+
+User: "also reset npc memory fully" (done: all `Adventurer` rows across
+`npc_personality`/`npc_outcome_log`/`npc_taming`/`conversation_threads`/
+`semantic_facts` plus the matching `npc_episodic` Qdrant points deleted -
+`wiki_knowledge` deliberately untouched, that's world lore not player
+memory; also incidentally scrubbed a lot of synthetic test-player junk
+this session's own WebSocket testing had left in the REAL Adventurer's
+data). Then: "what just happen in chat with npc" - checked the real,
+currently-running session's log
+(`Saves/12/logs/2026-07-22_13-10-56_server.log` - confirmed via
+`Get-CimInstance Win32_Process` that this is the user's actual live game,
+PID 13800, not a boot-test) instead of guessing, and the brand-new
+diagnostic logging from the navigation rewrite immediately found two real
+bugs on its very first real use:
+
+**Bug 1 - "wait for player" trapped an untamed NPC forever.** The log
+showed the exact mechanism: `SeekLandmarkSensor guide target resolved to
+(-160,121,-256)... distance=25 blocks`, then three `still guiding...25
+blocks from target` lines 15s apart (distance never changing at all),
+then `gave up guiding...no progress for too long` at the 60s mark. Root
+cause, found directly from that number never moving: the wait-for-player
+node's condition is `SeekLandmark AND NOT(owner within 15 blocks)` -
+`offer_guide` isn't gated on companion status (see `GuideState`'s own
+javadoc), so right after the memory reset (no owner at all), `IsOwner`
+never matches ANY player, making "owner within 15 blocks" always false
+and its negation always TRUE - the wait node matched every tick
+regardless of where the real player stood, and the NPC just stood still
+(`BodyMotion: Nothing`) for the entire guide. This bug has existed since
+the wait-for-player feature shipped earlier today; it was never caught
+before because every prior guide test happened to be on an already-tamed
+companion. Fixed by adding an explicit `IsCompanion` gate to the node in
+`Adventurer.json` - only a real tamed companion has an owner worth
+waiting for.
+
+**Bug 2 - the new map-marker feature crashed the packet encoder,
+confirmed via the full stack trace**: `io.netty.handler.codec.
+EncoderException: NullPointerException... "value" is null` at
+`MapMarker.serialize() -> PacketIO.writeVarString()`, triggered the
+instant `UpdateWorldMap` tried to push the newly-created marker to the
+client. Root cause: `NearbyLandmarks.createGuideMarker()` never set
+`icon`/`colorTint` on the constructed `UserMapMarker`, defaulting to
+Java's own `null` - the real, shipped `WorldMapManager.
+handleUserCreateMarker()` always defaults both (confirmed via
+disassembly: `"User1.png"` / black `Color(0,0,0)` when the client's own
+packet omits them), a detail easy to miss since `UserMapMarker`'s API
+makes both look optional. Fixed by setting the same two defaults
+explicitly.
+
+Both fixed, `./gradlew build` clean. **Could not boot-test or restart the
+live server this time** - the user's real session (PID 13800) was
+actively running throughout this investigation, confirmed via
+`Get-CimInstance Win32_Process`, so a competing `runServer` boot or a
+kill/restart would have stepped on their real play session. Jar rebuilt
+and reinstalled to the Mods folder (safe - doesn't touch the already-
+running JVM's loaded classes), but their CURRENT session still has the
+old, buggy jar in memory; both fixes need a restart to take effect. This
+is exactly the kind of thing the new diagnostic logging was added for -
+neither bug would have been remotely diagnosable from the old "gave up
+guiding...no progress for too long" line alone.
+
 ## Tuning table
 
 See README.md — it maps symptoms (slow dialogue, world stutter, OOM) to the

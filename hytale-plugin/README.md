@@ -1,5 +1,35 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: new diagnostic logging found two real bugs on its first real use
+
+After a full memory reset (all `Adventurer` rows + episodic memory wiped,
+world lore left alone), checked the real *currently running* session's
+log for "what just happened in chat" - the navigation rewrite's brand-new
+diagnostic logging paid for itself immediately.
+
+**An untamed NPC got stuck waiting forever.** The log showed target
+resolved at 25 blocks away, then distance stuck at exactly 25 for a full
+60 seconds before giving up - the "wait for player" node's condition
+(`NOT(owner within 15 blocks)`) is vacuously true when there's no owner
+at all (right after a reset, or for any non-companion `offer_guide`,
+since that's never been gated on taming status), so it matched every
+tick and the NPC just stood still. Existed since the wait-for-player
+feature shipped earlier today - never caught because every prior test
+happened to already be tamed. Fixed with an explicit `IsCompanion` gate
+in `Adventurer.json`.
+
+**The new map marker feature crashed the packet encoder** - confirmed via
+the full stack trace (`NullPointerException` in the real `MapMarker.
+serialize()`): `createGuideMarker()` never set the marker's `icon`/
+`colorTint`, defaulting to `null`, which the real `UpdateWorldMap` wire
+format doesn't tolerate. Fixed by explicitly setting the same defaults
+the real client-side marker-creation path uses (`"User1.png"` / black).
+
+Both fixed, clean build. Couldn't boot-test or restart this time - the
+user's real session was live throughout (confirmed via process check)
+and a competing boot or restart would have stepped on it - jar reinstalled
+to the Mods folder, but needs a restart to actually take effect.
+
 ## 2026-07-22, later still: navigation/guide rewrite - "npc tell so many incoherent things" fixed at the root
 
 User report: "it not working but npc tell so many incoherent things...

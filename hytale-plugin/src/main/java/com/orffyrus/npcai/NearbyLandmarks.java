@@ -4,6 +4,7 @@ import com.hypixel.hytale.builtin.locate.SpiralSearchUtil;
 import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.logger.HytaleLogger;
+import com.hypixel.hytale.protocol.Color;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.chunk.WorldChunk;
@@ -534,6 +535,22 @@ public final class NearbyLandmarks {
             marker.setId(id);
             marker.setPosition(target.x, target.z);
             marker.setName(label);
+            // icon/colorTint are NOT optional despite looking like it from
+            // UserMapMarker's own API - real bug found live 2026-07-22: a
+            // marker created with both left null (their Java default)
+            // crashed the packet encoder outright the instant this guide
+            // started (io.netty.handler.codec.EncoderException ->
+            // NullPointerException in the real, shipped MapMarker.
+            // serialize() -> PacketIO.writeVarString(), confirmed via the
+            // real server log's full stack trace) - UpdateWorldMap pushes
+            // markers to the client live, and null fields aren't tolerated
+            // by the wire format. The real, shipped
+            // WorldMapManager.handleUserCreateMarker() defaults exactly
+            // these two fields when the client's own CreateUserMarker
+            // packet omits them (confirmed via disassembly) - mirrored
+            // here rather than guessed.
+            marker.setIcon("User1.png");
+            marker.setColorTint(new Color((byte) 0, (byte) 0, (byte) 0));
             marker.withCreatedByUuid(playerId);
             marker.withCreatedByName("Adventurer");
             markers.addUserMapMarker(marker);
