@@ -690,6 +690,55 @@ docstring: "informational only"), just the model being imaginative at
 temperature 0.8 on short ambiguous input - worth another look someday, not
 urgent.
 
+## 2026-07-21, later still: found the real root cause of combat not engaging
+
+User's own phrasing: "npc have no rigid body comparate to other npc that
+attack back if attacked." Not a physics term as such, but the instinct was
+right - our custom NPCs really were missing something structural that real
+combat-capable creatures have.
+
+Direct comparison against real shipped role files (`Trork_Warrior.json` ->
+`Template_Trork_Melee.json`, and `Kweebec_Rootling.json` -> `Template_
+Kweebec_Sapling.json` - the exact same appearance our Adventurer uses)
+found it: every real creature that participates in the hostile/friendly
+targeting system declares a top-level `"AttitudeGroup"` field. **None of
+our 4 custom roles declared one at all.**
+
+Fetched the actual `AttitudeGroup` asset definitions (`Server/NPC/Attitude/
+Roles/.../Kweebec.json`, `.../Trork/Trork.json`) to see what this really
+controls: `AttitudeGroup.attitudeGroups` is a `Map<Attitude, String[]>` -
+each group explicitly lists OTHER GROUP NAMES it holds each attitude
+toward. Trork's own definition: `{"Friendly": ["Trork"], "Hostile":
+["Kweebec"], "Ignore": ["Kweebec_Prisoner"], "Revered": ["Trork_
+Chieftain"]}` - **Trork is hostile toward the literal string "Kweebec",
+never toward "Player" at all** (players get their own separate
+`DefaultPlayerAttitude` field entirely). This overturns the entire
+premise of the earlier `[Hostile, Neutral]` fix: `WorldSupport.
+getAttitude(trork, adventurer)` was never going to resolve to Hostile OR
+Neutral for an NPC with no group to match against Trork's list in the
+first place - it almost certainly fell through to some other default
+neither of those values covered. The `[Hostile, Neutral]` fix may still be
+correct/useful as defense-in-depth, but it was never the primary problem.
+
+Fix: added `"AttitudeGroup": "Kweebec"` to `Adventurer.json` only -
+matching its real `Kweebec_Rootling` appearance exactly, and Trork's own
+Hostile list verbatim. Deliberately NOT added to the other 3 roles: cross-
+checked the real, shipped `Klops_Merchant.json` (Merchant_Oskar's own
+appearance) and confirmed it has no `AttitudeGroup` either - this field is
+genuinely optional, only meaningful for creatures meant to participate in
+hostile/friendly targeting, and Elder_Miri/Merchant_Oskar/AI_Talker have
+no combat logic reading it regardless (non-combat by design, see the
+reactive-defense section above).
+
+`gradlew build`/`runServer` clean, zero validation errors (would have
+failed if "Kweebec" weren't a real registered `AttitudeGroup` asset -
+`AttitudeGroupExistsValidator` catches that), same NPC counts. Installed
+the rebuilt jar. Not yet re-confirmed live - this is now the third attempt
+at this specific bug, each one narrowing in on real evidence (disassembly,
+then actual session logs, then direct comparison against real shipped role
+files) rather than guessing - but "does it actually swing now" still needs
+the next play session to answer.
+
 ## 2026-07-21 audit pass, approved/ wired up, then a real GPU load test
 
 Asked to deep-audit the whole project (not chasing one symptom), fix what's

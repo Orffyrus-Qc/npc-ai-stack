@@ -10,6 +10,7 @@
   "DefaultNPCAttitude": "Ignore",
   "DefaultPlayerAttitude": "Neutral",
   "Appearance": "Kweebec_Rootling",
+  "AttitudeGroup": "Kweebec",
   "MaxHealth": 50,
   "IsMemory": true,
   "MemoriesCategory": "Adventurer",

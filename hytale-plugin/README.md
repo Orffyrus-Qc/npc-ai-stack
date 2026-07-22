@@ -101,6 +101,29 @@ prompt rule confusing "guide me somewhere" with "follow/accompany me") and
 the fix, verified against the real model. The attitude fix above may well
 be entirely correct - it just never got the chance to run in this session.
 
+**2026-07-21, real root cause found: missing `AttitudeGroup`.** Reported
+again, still not attacking. Direct comparison against real shipped role
+files (`Trork_Warrior.json`/`Template_Trork_Melee.json`, and `Kweebec_
+Rootling.json`/`Template_Kweebec_Sapling.json` - Adventurer's own exact
+appearance) found every real combat-capable creature declares a top-level
+`"AttitudeGroup"` field; none of our 4 custom roles declared one at all.
+Fetched the actual asset definitions (`Server/NPC/Attitude/Roles/...`):
+Trork's own group is explicitly `{"Hostile": ["Kweebec"], ...}` - hostile
+toward the literal string "Kweebec", never toward "Player" (that's a
+separate `DefaultPlayerAttitude` field). `WorldSupport.getAttitude()` was
+never going to resolve to Hostile *or* Neutral for an NPC with no group to
+match in the first place - overturning the premise of the earlier
+`[Hostile, Neutral]` fix, which may still be correct as defense-in-depth
+but was never the actual problem. Fixed: added `"AttitudeGroup":
+"Kweebec"` to `Adventurer.json` only, matching its real appearance and
+Trork's own Hostile list verbatim - deliberately not added to the other 3
+roles, since the real, shipped `Klops_Merchant.json` (Merchant_Oskar's own
+appearance) has no `AttitudeGroup` either; it's genuinely optional and
+only matters for creatures meant to participate in hostile/friendly
+targeting. Boot-tested clean (would have failed validation if "Kweebec"
+weren't a real registered asset). Rebuilt jar installed. Not yet
+re-confirmed live.
+
 **2026-07-21: reactive defense added** (requested: "npc must fight with me
 if I am attacked"). The Mob+Attitude sensor above only reacts to a hostile
 this companion can already see/sense itself - if something attacks the
