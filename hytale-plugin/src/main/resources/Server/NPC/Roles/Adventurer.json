@@ -104,7 +104,7 @@
               ]
             },
             {
-              "$Comment": "Adventurer-specific: notice nearby hostile creatures, mirroring the real Trork combat AI's own threat sensor (Type: Mob, Prioritiser: Attitude/Hostile) - feeds npc-ai-stack's ThreatMemory so the AI can react to it in conversation. LockOnTarget makes the found hostile the locked \"Target\" the chase/attack nodes below react to.",
+              "$Comment": "Adventurer-specific: notice nearby hostile creatures, mirroring the real Trork combat AI's own threat sensor (Type: Mob, Prioritiser: Attitude) - feeds npc-ai-stack's ThreatMemory so the AI can react to it in conversation. LockOnTarget makes the found hostile the locked \"Target\" the chase/attack nodes below react to. AttitudesByPriority is [Hostile, Neutral], not just [Hostile] - 2026-07-21 fix, real bug found live-testing companion combat (tamed, hostile mob present, still never attacked): WorldSupport.getAttitude() (confirmed via disassembly of SensorEntityPrioritiserAttitude.getPriority()) resolves a PAIRWISE relationship between this specific NPC and the candidate, not \"is this creature type hostile\" in the abstract - a mob configured hostile toward players is not automatically flagged Hostile toward another NPC like Adventurer, and any attitude not in this list is filtered out entirely (confirmed: an unlisted attitude throws IllegalStateException if ever reached, meaning it must be excluded upstream). The real, shipped analog for \"is this nearby thing dangerous\" - Server/NPC/Roles/_Core/Components/Steps/Component_Instruction_Damage_Check.json's own Sight/Sound-by-Attitude sensors, used by the neutral Kweebec to decide when to flee - checks [Hostile, Neutral] for exactly this reason, not Hostile alone.",
               "Continue": true,
               "Sensor": {
                 "Type": "Mob",
@@ -114,7 +114,7 @@
                 "LockOnTarget": true,
                 "Prioritiser": {
                   "Type": "Attitude",
-                  "AttitudesByPriority": [ "Hostile" ]
+                  "AttitudesByPriority": [ "Hostile", "Neutral" ]
                 }
               },
               "Actions": [
@@ -145,7 +145,7 @@
                     "LockOnTarget": true,
                     "Prioritiser": {
                       "Type": "Attitude",
-                      "AttitudesByPriority": [ "Hostile" ]
+                      "AttitudesByPriority": [ "Hostile", "Neutral" ]
                     }
                   }
                 ]

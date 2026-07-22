@@ -59,9 +59,29 @@ nothing, rather than a pre-written filler pretending to be its own words.
 tied purely to "is this NPC a companion + is a hostile nearby," not to a
 specific in-conversation "let's fight" request - a tamed companion will
 engage any hostile it notices while following, regardless of what was
-actually said. Real combat itself is still boot-tested only as of this
-section - none of the live test sessions so far happened near a hostile
-creature.
+actually said.
+
+**2026-07-21: real bug found and fixed - companion combat never actually
+attacked anything.** First live test (tamed companion, real hostile mob
+present) and it never engaged. Root cause: the Mob sensor's `Prioritiser`
+filtered for `AttitudesByPriority: ["Hostile"]` only. Confirmed via
+disassembly of `SensorEntityPrioritiserAttitude.getPriority()` that
+`WorldSupport.getAttitude()` resolves a *pairwise* relationship between
+this specific NPC and the candidate entity, not "is this creature type
+hostile" in the abstract - and any attitude not in the priority list gets
+filtered out entirely before it's even considered (an unlisted attitude
+reaching that code throws `IllegalStateException`, so it must be excluded
+upstream). A mob configured hostile toward players is not automatically
+flagged Hostile toward another NPC like Adventurer - it likely resolves to
+Neutral instead. The real, shipped analog for "is this nearby thing
+dangerous" (`Component_Instruction_Damage_Check.json`'s Sight/Sound-by-
+Attitude sensors, used by the neutral Kweebec to decide when to flee)
+checks `[Hostile, Neutral]`, not `Hostile` alone - for exactly this
+reason. Fixed to match. **Boot-tested clean, not yet re-confirmed live**
+(needs the next play session with a real hostile nearby). Possible
+side effect worth watching for: this may now also make a companion react
+to genuinely harmless Neutral creatures (passive wildlife), the same
+trade-off the real game's own Kweebec fear-check already accepts.
 
 **2026-07-21: reactive defense added** (requested: "npc must fight with me
 if I am attacked"). The Mob+Attitude sensor above only reacts to a hostile

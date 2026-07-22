@@ -597,6 +597,48 @@ counts as before. Not yet re-confirmed live (needs the next play session)
 but the fix no longer depends on any framework behavior that couldn't be
 directly proven correct via disassembly.
 
+## 2026-07-21, later still: companion combat never actually attacked - real bug, found and fixed
+
+Reported: NPC won't attack. Confirmed first (before digging further) that
+this wasn't the two obvious non-bugs - the NPC was genuinely tamed and
+following, and a real hostile mob was genuinely present - so this was a
+real bug in the combat chain, not a misunderstanding of when combat is
+supposed to trigger.
+
+First ruled out my leading suspicion (that `LockOnTarget: true` on the Mob
+sensor and the later bare `Target` sensor might write/read different
+target slots when neither names one explicitly, since every real shipped
+example I'd found up to that point always names an explicit `TargetSlot`).
+Disassembled `BuilderSensorTarget`/`BuilderSensorEntityBase`'s
+`readConfig()` and confirmed both independently default to the exact same
+string, `"LockedTarget"`, when omitted - not the bug.
+
+The real cause: the Mob sensor's `Prioritiser` filtered for
+`AttitudesByPriority: ["Hostile"]` only. Disassembling
+`SensorEntityPrioritiserAttitude.getPriority()` showed it calls
+`WorldSupport.getAttitude(candidate, self, ...)` - a *pairwise* lookup
+between this specific NPC and the candidate entity, not "is this creature
+type hostile" as an inherent property - and confirmed (via an
+`IllegalStateException` that fires if an unlisted attitude ever reaches
+that code) that any attitude not in the priority list gets filtered out
+entirely before reaching this point. A mob configured hostile toward
+*players* has no reason to also be flagged Hostile toward another NPC like
+Adventurer - it most likely resolves to Neutral instead, which wasn't in
+the list. The real, shipped analog for "is this nearby thing dangerous" -
+`Component_Instruction_Damage_Check.json`'s Sight/Sound-by-Attitude
+sensors, which the neutral Kweebec uses to decide when to flee - checks
+`[Hostile, Neutral]`, not `Hostile` alone, for exactly this reason.
+Fixed both `AttitudesByPriority` lists in `Adventurer.json` (the original
+30-block threat-noting sensor and the reactive-defense 45-block one added
+earlier today) to match.
+
+`gradlew build`/`runServer` clean, zero validation errors, same NPC
+counts. Not yet re-confirmed live. Flagged one real trade-off inherited
+from the shipped game's own equivalent check: this may now also make a
+companion react to harmless Neutral creatures (passive wildlife), not just
+genuinely dangerous ones - the same imprecision the real Kweebec fear-check
+already accepts, not something worse than the shipped game does.
+
 ## 2026-07-21 audit pass, approved/ wired up, then a real GPU load test
 
 Asked to deep-audit the whole project (not chasing one symptom), fix what's
