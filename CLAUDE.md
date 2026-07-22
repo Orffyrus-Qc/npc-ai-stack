@@ -657,6 +657,70 @@ jar, that live session is still on the pre-fix build - a restart is
 needed to actually pick this fix up, separate from just reinstalling the
 jar file.
 
+## 2026-07-22, later still: companion must always know where the owner is and always follow
+
+User: "fix tamed npc compagnon must always know where I am and always
+follow me." Checked the real, shipped tamed-animal template
+(`Server/NPC/Roles/_Core/Templates/Template_Livestock.json`, 2536 lines)
+first, same as every other companion-behavior decision this session -
+found it has **no owner-tracking logic at all** (its own `$Tamed` state is
+just a "spawn heart particles near a Revered/Friendly entity" reaction,
+not continuous following of a specific player). Vanilla taming never
+needs to track one specific player, so this whole "always follow YOUR
+owner specifically" concept is custom to this project with no vanilla
+precedent to copy - designed from scratch, grounded in real engine
+primitives rather than guessed.
+
+**Real structural bug found first, before the requested range/speed
+tuning**: the Watching state's "Return to Idle when player leaves" node
+has no `Continue` and sits ABOVE the follow node in the Instructions
+array - if the owner exceeded 12 blocks and no OTHER player happened to
+be nearby, this fired FIRST and kicked the companion back to `Idle`
+state entirely, which has zero owner-tracking logic (just
+wave-if-a-player-approaches). No range or speed fix below would have
+mattered at all without addressing this first - the companion would
+never even reach the follow logic once its owner got far enough away.
+Fixed: wrapped the guard as `{"And": [{"Not": "IsCompanion"}, {"Not":
+{"Player","Range":12}}]}` - a tamed companion never leaves Watching at
+all, regardless of current distance from its owner.
+
+**Found a real, shipped `"Type": "Teleport"` BodyMotion** to build the
+"always know where I am" half of the request on -
+`Server/NPC/Roles/_Core/Tests/Test_Teleport.json` is the only place this
+engine's Teleport type is actually demonstrated:
+`{"Sensor": {"Player","Range":10}, "BodyMotion": {"Teleport",
+"OffsetRange":[2,2], "OffsetSector":60}}`. Added a new teleport
+catch-up node: owner detected within a wide 300-block range but NOT
+within the normal 100-block follow range -> teleport a few blocks from
+them (`OffsetRange: [3,5]`, `OffsetSector: 360` for a random direction,
+not literally on top of them). **Self-limiting by construction, no
+cooldown or new Java code needed**: the instant it teleports the
+companion within 100 blocks, the very next tick's "not within 100" check
+becomes false and this node simply stops matching, falling through to
+the normal walk-to-owner node instead - no repeated-teleport jitter risk.
+
+**Follow tuning**: widened the normal follow Sensor's Range 30 -> 100
+(Watching and `$Interaction` states both) and bumped `RelativeSpeed`
+0.9 -> 1.0 - at 0.9x speed the companion structurally fell behind during
+ANY sustained walking (not just sprinting), eventually exceeding the old
+30-block range on its own even without anything going "wrong." No
+teleport-catch-up added to `$Interaction`'s matching block - interacting
+requires the player to already be close enough to click, so the
+huge-separation case that node exists for can't apply during that
+specific ~1s window.
+
+Boot-tested via a real `./gradlew runServer` boot: `Validation
+complete.`, `Loaded 974 NPC configurations, Generic: 1`, `Hytale Server
+Booted!` - no errors tied to the new `Teleport` BodyMotion or the
+`And`/`Not`/`IsCompanion` guard restructuring. Jar rebuilt and
+reinstalled. Checked process safety again before any cleanup
+(`Get-CimInstance Win32_Process -Filter "Name='java.exe'"`) - only the
+Gradle daemon remained this time (the user's own session from earlier
+must have been closed on their end), nothing needed touching. Not yet
+live-confirmed (needs a real test: tame it, walk far away including
+around obstacles/corners, and separately test a >100-block jump to
+confirm the teleport catch-up actually fires and settles cleanly).
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/

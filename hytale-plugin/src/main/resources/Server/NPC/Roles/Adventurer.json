@@ -201,13 +201,19 @@
               ]
             },
             {
-              "$Comment": "Return to Idle when player leaves (clear animation first)",
+              "$Comment": "Return to Idle when player leaves (clear animation first) - but NEVER for a tamed companion, regardless of how far its owner currently is. 2026-07-22 real bug found live (\"tamed npc companion must always know where I am and always follow me\"): this node has no Continue and sits ABOVE the follow/teleport nodes below, so if the owner exceeded 12 blocks and no OTHER player happened to be nearby, this fired FIRST and kicked the companion back to Idle state entirely - abandoning the follow/teleport logic before it could ever run, regardless of how generous their own Range values were. Idle state has no owner-tracking logic at all (just wave-if-a-player-approaches), so a companion that fell back to Idle this way would simply stand still forever once its owner got far enough away. Fixed by never leaving Watching for a companion at all - see the follow/teleport nodes below for how it actually stays with a far-away owner instead.",
               "Sensor": {
-                "Type": "Not",
-                "Sensor": {
-                  "Type": "Player",
-                  "Range": 12
-                }
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "Not", "Sensor": { "Type": "IsCompanion" } },
+                  {
+                    "Type": "Not",
+                    "Sensor": {
+                      "Type": "Player",
+                      "Range": 12
+                    }
+                  }
+                ]
               },
               "Actions": [
                 {
@@ -275,14 +281,45 @@
               }
             },
             {
-              "$Comment": "Companion mode: once tamed, seek toward ITS OWNER specifically (no hostile currently being fought/chased, and not actively guiding - see the nodes above, which take priority). The Seek/MaintainDistance BodyMotion types are real, shipped engine functionality (confirmed via disassembly and via the real Template_Livestock.json's own tamed-animal follow behavior), not custom pathfinding code. 2026-07-22: added the \"IsOwner\" Filter (EntityFilterIsOwner.java) to the Player sensor, replacing the earlier v1 simplification that followed the NEAREST player regardless of who actually tamed it - correct only when the owner happened to be nearest (true in all solo testing so far), wrong the moment another player is closer. Confirmed via disassembly that BuilderSensorPlayer extends BuilderSensorEntityBase, the same Filters-supporting base \"Mob\" uses (see EntityFilterHostileSpecies.java for the same pattern). CompanionState now tracks the real owner UUID, not just a companion boolean - see its javadoc.",
+              "$Comment": "Companion mode, catch-up teleport: owner detected within a wide range but too far to walk to comfortably (beyond the normal 100-block follow range below). Real, shipped 'Teleport' BodyMotion (confirmed via the real, shipped Test_Teleport.json - the only place this engine's Teleport type is actually demonstrated; Template_Livestock.json's own vanilla tamed-animal state has no owner-tracking logic at all to model this on, since vanilla taming never needs to track a SPECIFIC player - this whole owner-teleport concept is custom to this project). 2026-07-22, added for \"tamed npc companion must always know where I am and always follow me\": self-limiting by construction, no cooldown/Java code needed - the moment it teleports the companion within 100 blocks, the very next tick's \"Not within 100\" check becomes false and this node stops matching, falling through to the normal walk-to-owner node below instead. OffsetRange/OffsetSector place it a few blocks from the owner in a random direction, not literally on top of them.",
               "Sensor": {
                 "Type": "And",
                 "Sensors": [
                   { "Type": "IsCompanion" },
                   {
                     "Type": "Player",
-                    "Range": 30,
+                    "Range": 300,
+                    "Filters": [
+                      { "Type": "IsOwner" }
+                    ]
+                  },
+                  {
+                    "Type": "Not",
+                    "Sensor": {
+                      "Type": "Player",
+                      "Range": 100,
+                      "Filters": [
+                        { "Type": "IsOwner" }
+                      ]
+                    }
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Teleport",
+                "OffsetRange": [ 3, 5 ],
+                "OffsetSector": 360
+              }
+            },
+            {
+              "$Comment": "Companion mode: once tamed, seek toward ITS OWNER specifically (no hostile currently being fought/chased, and not actively guiding - see the nodes above, which take priority). The Seek/MaintainDistance BodyMotion types are real, shipped engine functionality (confirmed via disassembly and via the real Template_Livestock.json's own tamed-animal follow behavior), not custom pathfinding code. 2026-07-22: added the \"IsOwner\" Filter (EntityFilterIsOwner.java) to the Player sensor, replacing the earlier v1 simplification that followed the NEAREST player regardless of who actually tamed it - correct only when the owner happened to be nearest (true in all solo testing so far), wrong the moment another player is closer. Confirmed via disassembly that BuilderSensorPlayer extends BuilderSensorEntityBase, the same Filters-supporting base \"Mob\" uses (see EntityFilterHostileSpecies.java for the same pattern). CompanionState now tracks the real owner UUID, not just a companion boolean - see its javadoc. 2026-07-22, later: Range widened 30->100 and RelativeSpeed bumped 0.9->1.0 for \"must always follow me\" - at 0.9x speed the companion structurally fell behind during ANY sustained walking (let alone sprinting), eventually exceeding the old 30-block range and stopping outright; 100 blocks plus the teleport catch-up node above together mean normal separation (corners, sprinting ahead, minor terrain obstacles) never actually loses the companion.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "Player",
+                    "Range": 100,
                     "Filters": [
                       { "Type": "IsOwner" }
                     ]
@@ -291,7 +328,7 @@
               },
               "BodyMotion": {
                 "Type": "Seek",
-                "RelativeSpeed": 0.9,
+                "RelativeSpeed": 1,
                 "StopDistance": 3,
                 "RelaxedMoveConstraints": false
               }
@@ -338,7 +375,7 @@
               ]
             },
             {
-              "$Comment": "Keep following even while starting a conversation - $Interaction only lasts ~1s before the Timeout below returns to Watching, but without this an established companion visibly freezes for that second every time the player clicks to talk. Continue:true is required here so the Timeout node below still runs every tick regardless of whether this one matches - without it, a nearby companion would get stuck in $Interaction forever. Same owner-scoped IsOwner Filter as the Watching state's matching block - see its $Comment for why.",
+              "$Comment": "Keep following even while starting a conversation - $Interaction only lasts ~1s before the Timeout below returns to Watching, but without this an established companion visibly freezes for that second every time the player clicks to talk. Continue:true is required here so the Timeout node below still runs every tick regardless of whether this one matches - without it, a nearby companion would get stuck in $Interaction forever. Same owner-scoped IsOwner Filter as the Watching state's matching block - see its $Comment for why. Range/RelativeSpeed matched to the Watching state's own 2026-07-22 widening (30->100, 0.9->1.0) for consistency - no teleport-catch-up node here though, since interacting requires the player to already be close enough to click in the first place, so the huge-separation case that node exists for can't apply during this specific ~1s window.",
               "Continue": true,
               "Sensor": {
                 "Type": "And",
@@ -346,7 +383,7 @@
                   { "Type": "IsCompanion" },
                   {
                     "Type": "Player",
-                    "Range": 30,
+                    "Range": 100,
                     "Filters": [
                       { "Type": "IsOwner" }
                     ]
@@ -355,7 +392,7 @@
               },
               "BodyMotion": {
                 "Type": "Seek",
-                "RelativeSpeed": 0.9,
+                "RelativeSpeed": 1,
                 "StopDistance": 3,
                 "RelaxedMoveConstraints": false
               }

@@ -1,5 +1,42 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: companion must always know where its owner is, always follow
+
+Requested: "tamed npc compagnon must always know where I am and always
+follow me." Checked the real, shipped `Template_Livestock.json` (2536
+lines) first - it has no owner-tracking logic at all, since vanilla
+taming never needs to follow one specific player. This whole concept is
+custom to this project, designed from real engine primitives rather than
+copied from a vanilla equivalent that doesn't exist.
+
+**Real structural bug found before any range/speed tuning**: the
+Watching state's "Return to Idle when player leaves" node sits above the
+follow logic with no `Continue` - if the owner got far enough away and no
+other player was nearby, this fired first and kicked the companion back
+to `Idle` (which has zero owner-tracking), abandoning the follow logic
+entirely regardless of how generous its own settings were. Fixed: a
+tamed companion now never leaves Watching, period, regardless of current
+distance from its owner.
+
+**"Always know where I am"** - a new teleport catch-up node using the
+real, shipped `"Type": "Teleport"` BodyMotion (the only place it's
+demonstrated in vanilla content is `Test_Teleport.json`): owner detected
+within a wide 300-block range but beyond the normal 100-block walking
+range triggers a short teleport to within a few blocks of them. Self-
+limiting by construction - the moment it teleports close enough, the
+same "too far" condition that triggered it stops being true, no cooldown
+or new Java code needed.
+
+**"Always follow me"** - widened the normal follow range 30->100 blocks
+and bumped speed 0.9x->1.0x (at 0.9x the companion structurally fell
+behind during any sustained walking, not just sprinting, eventually
+exceeding the old 30-block range on its own).
+
+Boot-tested via a real `./gradlew runServer` boot - clean validation, jar
+rebuilt and reinstalled. Not yet live-confirmed (needs a real test: walk
+far away including around obstacles, and separately a >100-block jump to
+confirm the teleport catch-up fires and settles cleanly).
+
 ## 2026-07-22, later still: found the real "dropped context" bug - a mangled Unicode escape
 
 Two earlier fixes today (trailing-tag hallucination, real-world wiki
