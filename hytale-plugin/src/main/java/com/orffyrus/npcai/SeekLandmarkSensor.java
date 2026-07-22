@@ -33,6 +33,16 @@ import java.util.UUID;
  * or if NearbyLandmarks never found anything to guide to in the first
  * place - so a stale/impossible guide request doesn't leave the NPC "stuck"
  * trying forever.
+ *
+ * 2026-07-22 rewrite: resolves a NAMED target via NearbyLandmarks.
+ * resolveGuideTarget() - the same real candidate list (player's own map
+ * markers, then real nearby zones/prefabs) already shown to the model as
+ * situation text, so the destination the NPC actually walks to can never
+ * diverge from what it said out loud. Also now: logs the resolved target
+ * once (plus a periodic distance-remaining line while en route -
+ * GuideState.shouldLogStuck()) and drops a real, native map marker at the
+ * destination (NearbyLandmarks.createGuideMarker()/removeGuideMarker()) so
+ * the player can see exactly where they're headed on their own map.
  */
 public class SeekLandmarkSensor extends SensorBase {
 
@@ -81,27 +91,33 @@ public class SeekLandmarkSensor extends SensorBase {
                 return true;
             }
             LOGGER.atInfo().log(npcId + " done showing the player the landmark, resuming normal behavior");
+            NearbyLandmarks.removeGuideMarker(ref, store, GuideState.getCreatedMarkerId(npcId));
             GuideState.stopGuiding(npcId);
             return false;
         }
+
+        // 2026-07-22 rewrite ("npc tell so many incoherent things... rewrite
+        // it from the beginning"): a real session's log showed the model
+        // inventing fictional destinations ("Steve's Fort", "Salt Lake" -
+        // not real places) that then silently failed to resolve to
+        // anything reachable. resolveGuideTarget() now checks the SAME
+        // real candidate list (player's own map markers, then real nearby
+        // zones/prefabs) already shown to the model as situation text - see
+        // NearbyLandmarks' class javadoc - before falling back to the
+        // older, looser world-gen search for anything still ungrounded.
+        String keyword = GuideState.getKeyword(npcId);
+        UUID playerId = GuideState.getPlayerId(npcId);
+        // Whether the target hasn't been resolved yet this guide session -
+        // gates both the one-time diagnostic log line below and guide-
+        // marker creation, so neither repeats every tick.
+        boolean firstResolution = GuideState.getCreatedMarkerId(npcId) == null;
 
         Vector3i target;
         if (mode == GuideState.Target.NEAREST_WATER) {
             target = NearbyLandmarks.closestWaterPosition(npcId, ref, store);
         } else if (mode == GuideState.Target.NAMED) {
-            String keyword = GuideState.getKeyword(npcId);
-            UUID playerId = GuideState.getPlayerId(npcId);
-            // Check the requesting player's own real map markers FIRST - a
-            // precise, player-chosen destination ("home", "the mine") beats
-            // a fuzzy match against Hytale's own internal zone/prefab names
-            // whenever one exists. See NearbyLandmarks.
-            // closestPlayerMarkerPosition()'s javadoc. 2026-07-22, "lead
-            // player through the map to a precise location."
-            target = (keyword != null && playerId != null)
-                    ? NearbyLandmarks.closestPlayerMarkerPosition(npcId, keyword, playerId, ref, store) : null;
-            if (target == null && keyword != null) {
-                target = NearbyLandmarks.closestNamedPosition(npcId, keyword, ref, store);
-            }
+            target = keyword != null
+                    ? NearbyLandmarks.resolveGuideTarget(npcId, keyword, playerId, ref, store) : null;
             if (target == null) {
                 // 2026-07-22 real bug found live: every NAMED search in a
                 // real session failed ("keyword=flower", "keyword=wilderness"
@@ -110,8 +126,7 @@ public class SeekLandmarkSensor extends SensorBase {
                 // there doing nothing for every one of those requests -
                 // from the player's side, indistinguishable from "the guide
                 // feature stopped working." A specific keyword not matching
-                // anything is a real, expected limitation (the model can't
-                // know Hytale's exact internal asset names), so fall back to
+                // anything is a real, expected limitation, so fall back to
                 // the general nearest-landmark search instead of stopping
                 // guiding entirely - "I don't know a place called that, but
                 // here's somewhere I do know" beats doing nothing.
@@ -122,12 +137,30 @@ public class SeekLandmarkSensor extends SensorBase {
         }
         if (target == null) {
             LOGGER.atInfo().log(npcId + " couldn't find a " + mode + " to guide toward - giving up");
+            NearbyLandmarks.removeGuideMarker(ref, store, GuideState.getCreatedMarkerId(npcId));
             GuideState.stopGuiding(npcId);
             return false;
         }
 
         double dx = target.x - pos.x, dz = target.z - pos.z;
         double distanceSq = dx * dx + dz * dz;
+
+        if (firstResolution) {
+            // One-time diagnostic line for exactly what this session's real
+            // log was missing: the resolved coordinate, the NPC's current
+            // position, and the real straight-line distance between them -
+            // see GuideState.STUCK_LOG_INTERVAL_MILLIS's javadoc for why.
+            LOGGER.atInfo().log(String.format(
+                    "%s guide target resolved to (%d,%d,%d), currently at (%.0f,%.0f,%.0f), distance=%.0f blocks",
+                    npcId, target.x, target.y, target.z, pos.x, pos.y, pos.z, Math.sqrt(distanceSq)));
+            // Drop a real, native map marker at the destination - see
+            // NearbyLandmarks.createGuideMarker()'s javadoc. Labeled with
+            // the model's own keyword when available so the pin reads as
+            // "Adventurer: fort" rather than a generic placeholder.
+            String label = "Adventurer: " + (keyword != null ? keyword : "guide destination");
+            String markerId = NearbyLandmarks.createGuideMarker(ref, store, playerId, label, target);
+            GuideState.setCreatedMarkerId(npcId, markerId != null ? markerId : "");
+        }
 
         // Reset the give-up clock whenever real progress happens - see
         // GuideState.MAX_STUCK_MILLIS's javadoc for why a flat
@@ -137,8 +170,13 @@ public class SeekLandmarkSensor extends SensorBase {
         GuideState.recordProgress(npcId, distanceSq);
         if (GuideState.hasTimedOut(npcId)) {
             LOGGER.atInfo().log(npcId + " gave up guiding (target=" + mode + ") - no progress for too long");
+            NearbyLandmarks.removeGuideMarker(ref, store, GuideState.getCreatedMarkerId(npcId));
             GuideState.stopGuiding(npcId);
             return false;
+        }
+        if (GuideState.shouldLogStuck(npcId)) {
+            LOGGER.atInfo().log(String.format(
+                    "%s still guiding (target=%s), %.0f blocks from target", npcId, mode, Math.sqrt(distanceSq)));
         }
 
         if (Math.sqrt(distanceSq) < ARRIVED_DISTANCE) {

@@ -56,15 +56,18 @@ public final class GuideState {
          * or matches nothing) with the model's own understanding of what
          * was actually requested. See Guiding's keyword field.
          *
-         * Also checked FIRST against the requesting player's own real,
-         * native Hytale map markers (NearbyLandmarks.closestPlayerMarkerPosition,
-         * a player-placed/named pin on their in-game map - see that
-         * method's javadoc) before falling back to the zone/prefab search
-         * above - a player's own marker name is an exact, precise
-         * destination they chose themselves ("home", "the mine"), strictly
-         * better than a fuzzy match against Hytale's own internal asset
-         * names whenever one exists. Added 2026-07-22 ("lead player through
-         * the map to a precise location"). */
+         * Resolved via NearbyLandmarks.resolveGuideTarget() (2026-07-22
+         * rewrite): checks the requesting player's own real map markers
+         * FIRST (a precise, player-chosen destination - "home", "the
+         * mine" - beats a fuzzy match against Hytale's own internal asset
+         * names whenever one exists), then the same real nearby zone/
+         * prefab candidates already shown to the model as situation text
+         * (NearbyLandmarks.describe()) - so what the NPC says and where it
+         * actually walks can never diverge - falling back to the older,
+         * looser closestNamedPosition() world-gen search only if nothing
+         * in that curated list matches. See NearbyLandmarks' class javadoc
+         * for the full "npc tell so many incoherent things" story this
+         * fixes. */
         NAMED
     }
 
@@ -95,17 +98,25 @@ public final class GuideState {
      * even one tick of "we're here" before follow resumed. */
     private static final long ARRIVAL_LINGER_MILLIS = 5_000;
 
+    /** Minimum real time between "still guiding, N blocks away" diagnostic
+     * log lines while en route - see shouldLogStuck()'s javadoc. Added
+     * 2026-07-22: this session's real log had no way to tell whether a
+     * guide that later timed out ever actually made any progress at all,
+     * or what its real target/distance even was - this closes that gap
+     * for next time, without spamming a log line every single tick. */
+    private static final long STUCK_LOG_INTERVAL_MILLIS = 15_000;
+
     /** keyword is only meaningful (non-null) when target == NAMED. playerId
      * is whoever's real chat/interaction triggered this guide (NOT
      * necessarily this NPC's tamed owner - offer_guide isn't gated on
      * companion status, see TalkToAIAction/PlayerChatToAIListener) - needed
      * so a NAMED search can check THAT player's own map markers, not
      * arbitrarily the owner's.
-     * Not a record: lastDistanceSq/lastProgressMillis/arrivedAtMillis are
-     * updated in place every tick by a live SeekLandmarkSensor without
-     * disturbing target/keyword/startedAtMillis or clobbering the "don't
-     * reset if already guiding toward this same target" dedupe in
-     * startGuiding() below. */
+     * Not a record: lastDistanceSq/lastProgressMillis/arrivedAtMillis/
+     * createdMarkerId/lastStuckLogMillis are updated in place every tick
+     * by a live SeekLandmarkSensor without disturbing target/keyword/
+     * startedAtMillis or clobbering the "don't reset if already guiding
+     * toward this same target" dedupe in startGuiding() below. */
     private static final class Guiding {
         final Target target;
         final String keyword;
@@ -114,6 +125,12 @@ public final class GuideState {
         volatile long lastProgressMillis;
         volatile double lastDistanceSq = Double.MAX_VALUE;
         volatile long arrivedAtMillis = 0;
+        volatile long lastStuckLogMillis;
+        /** Id of the real map marker SeekLandmarkSensor dropped at this
+         * guide's target (see NearbyLandmarks.createGuideMarker()) - null
+         * until the target's first resolution, "" if creation was
+         * attempted and failed (so it isn't retried every tick). */
+        volatile String createdMarkerId = null;
 
         Guiding(Target target, String keyword, UUID playerId, long startedAtMillis) {
             this.target = target;
@@ -121,6 +138,7 @@ public final class GuideState {
             this.playerId = playerId;
             this.startedAtMillis = startedAtMillis;
             this.lastProgressMillis = startedAtMillis;
+            this.lastStuckLogMillis = startedAtMillis;
         }
     }
 
@@ -259,5 +277,42 @@ public final class GuideState {
         Guiding g = GUIDING.get(npcId);
         return g != null && g.arrivedAtMillis != 0
                 && (System.currentTimeMillis() - g.arrivedAtMillis) < ARRIVAL_LINGER_MILLIS;
+    }
+
+    /** Id of the real map marker created for this guide's target, or null
+     * if none has been created (or attempted) yet - see
+     * NearbyLandmarks.createGuideMarker()/removeGuideMarker(). */
+    public static String getCreatedMarkerId(String npcId) {
+        Guiding g = GUIDING.get(npcId);
+        return g != null ? g.createdMarkerId : null;
+    }
+
+    /** Records the id of a just-created guide marker (or "" if creation
+     * was attempted and failed) - SeekLandmarkSensor calls this exactly
+     * once per guide session, right after the target is first resolved. */
+    public static void setCreatedMarkerId(String npcId, String markerId) {
+        Guiding g = GUIDING.get(npcId);
+        if (g != null) {
+            g.createdMarkerId = markerId;
+        }
+    }
+
+    /** True at most once every STUCK_LOG_INTERVAL_MILLIS while guiding -
+     * lets SeekLandmarkSensor log a periodic "still guiding, N blocks
+     * away" line so a future stuck/incoherent session shows real
+     * distance-over-time in the log instead of a single opaque give-up
+     * message at the end (see this constant's javadoc for why that gap
+     * mattered this time). Side-effecting: updates the internal timer as
+     * a side effect of returning true, same throttling pattern as a
+     * regular rate limiter. */
+    public static boolean shouldLogStuck(String npcId) {
+        Guiding g = GUIDING.get(npcId);
+        if (g == null) return false;
+        long now = System.currentTimeMillis();
+        if (now - g.lastStuckLogMillis >= STUCK_LOG_INTERVAL_MILLIS) {
+            g.lastStuckLogMillis = now;
+            return true;
+        }
+        return false;
     }
 }

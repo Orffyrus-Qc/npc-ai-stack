@@ -1,5 +1,50 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: navigation/guide rewrite - "npc tell so many incoherent things" fixed at the root
+
+User report: "it not working but npc tell so many incoherent things...
+rewrite it from the beginning," plus a full feature spec. Checked the
+real log first - it showed the model fabricating entirely fictional
+destinations ("Steve's Fort," "Salt Lake") with fake backstories and
+distances, then both guide attempts silently timing out with zero
+diagnostic info. Wiki Q&A, memory, and follow+fight weren't implicated,
+so the rewrite was scoped to navigation/guide only (confirmed with the
+user first).
+
+**Root cause**: the model could invent a destination description with no
+connection to reality, and a keyword extracted from that invention was
+searched for hopefully - nothing guaranteed what the NPC said matched
+where it walked.
+
+**Fix**: `NearbyLandmarks.java` rewritten around one shared candidate
+list (real nearby zones/prefabs + the requesting player's own real map
+markers) that feeds BOTH the situation text shown to the model and the
+new `resolveGuideTarget()` - a real destination the model mentions can't
+fail to resolve anymore, and the prompt now tells the model to use exact
+names from that list instead of inventing one, with the same "admit what
+you don't know" honesty already used for Hytale lore.
+
+Also added: the NPC now drops its own real, native map marker at the
+destination (using the same `UserMapMarkersStore` API the game's own map
+UI uses) so the player can see where they're headed, not just infer it
+from chat; and real diagnostic logging of the resolved target/distance,
+since this whole investigation had to infer everything from timing alone
+before.
+
+**Two more real parser bugs found live-testing this**: the model
+sometimes puts all its tags BEFORE the spoken line instead of after
+(silently discarding real text that was actually there), and sometimes
+re-emits a tag a second time after the spoken line (leaking straight into
+the displayed chat). Both fixed in `llm_client.py`'s response parser,
+verified with a 5-case regression battery.
+
+Boot-tested clean, jar rebuilt/reinstalled, orchestrator rebuilt/
+redeployed, repeatedly re-verified against the real live model with a
+realistic situation string - consistently grounded, honest, coherent
+replies. Still needs the user's own play session to confirm the real
+Java-side wiring (marker visibility on their client, whether a stuck
+guide now logs something diagnosable).
+
 ## 2026-07-22, later still: guide to a precise location - hooked into Hytale's real, native map markers
 
 Asked what could improve precise-location guiding. Checked first whether

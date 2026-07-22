@@ -76,11 +76,14 @@ public class TalkToAIAction extends ActionBase {
         // Computed once here (Ref/Store are only available in this ECS
         // callback, not in PlayerChatToAIListener's async chat handling) and
         // cached on the Conversation so every later chat turn reuses it
-        // rather than needing NPC entity access at all. Landmarks are static
-        // (world geography never changes for a stationary NPC), so this is
-        // safe to cache forever - unlike ThreatMemory below, which is live
-        // and re-checked on every single turn, not cached on the Conversation.
-        String situation = NearbyLandmarks.describe(npcId, ref, store);
+        // rather than needing NPC entity access at all. The zone/prefab
+        // portion is static (world geography never changes for a
+        // stationary NPC) - unlike ThreatMemory below, which is live and
+        // re-checked on every single turn, not cached on the Conversation.
+        // 2026-07-22: describe() now also lists the player's own real map
+        // markers (playerUuid) - see NearbyLandmarks' javadoc for why this
+        // and resolveGuideTarget() share one candidate list.
+        String situation = NearbyLandmarks.describe(npcId, playerUuid, ref, store);
 
         NpcAiPlugin.ACTIVE_CONVERSATIONS.put(
                 playerUuid,

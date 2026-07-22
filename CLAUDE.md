@@ -1850,6 +1850,104 @@ untested: the actual marker-lookup path itself needs the user to place a
 real map marker via the in-game map UI and then ask to be guided there by
 that name - not something drivable from here.
 
+## 2026-07-22, later still: navigation/guide rewrite - grounded destinations, real map markers, two real parser bugs
+
+User: "it not working but npc tell so many incoherent things... rewrite it
+from the beginning," followed by a full feature spec (map knowledge,
+recognize/create map markers, follow+fight on request, wiki Q&A, go-ahead-
+and-wait). Checked the real log from their actual test session
+(`Saves/11/logs/2026-07-22_11-41-31_server.log`) before agreeing to a
+rewrite - it showed the model fabricating entirely fictional destinations
+("Steve's Fort," "Salt Lake" - not real places) with invented backstories
+and fake distances, then both real guide attempts silently timing out
+after 60s with zero diagnostic information about why. Wiki Q&A, memory,
+and follow+fight weren't showing any errors and already matched the
+user's spec, so - confirmed with the user via AskUserQuestion - scoped the
+rewrite to navigation/guide only, not a ground-up rebuild of everything.
+
+**Root cause**: the model was free to invent a destination description
+with zero connection to anything real, and a keyword extracted from that
+invention was searched for hopefully - there was no mechanism guaranteeing
+what the NPC SAID matched where it actually WALKED.
+
+**Fix - one shared "known candidates" source of truth**
+(`NearbyLandmarks.java`, full rewrite): a new `Candidate` record (name,
+position, distance, describe-text) gathers real nearby zones, real nearby
+unique prefabs, and - new - the requesting player's own real Hytale map
+markers (see the map-marker section below), cached appropriately (zones/
+prefabs forever, since a fixed NPC's answer never changes; markers fresh
+every call, since a player can add/rename/remove them any time). The
+SAME list feeds both `describe()` (situation text shown to the model,
+now with a new "Your own marked places" section) and the new
+`resolveGuideTarget()` (checks the player's markers first, then the same
+static candidates, before falling back to the older, looser
+`closestNamedPosition()` world-gen search) - so a real destination the
+model mentions can never fail to resolve, and an invented one degrades to
+the same fallback as before instead of failing silently.
+
+**Prompt change** (`llm_client.py`): GUIDE_TARGET must use the exact name
+of something listed in "Current situation" when the player's request
+matches it, extending the same "admit the edges of your own knowledge"
+honesty principle already used for Hytale lore to navigation - don't
+invent a specific name/distance/backstory for a place that doesn't exist.
+
+**NPC creates its own real map marker** at the destination
+(`NearbyLandmarks.createGuideMarker()`/`removeGuideMarker()`, using the
+real, disassembly-confirmed `UserMapMarkersStore.addUserMapMarker()`/
+`removeUserMapMarker()` API - the same one the game's own
+`WorldMapManager.handleUserCreateMarker()` uses when a player drops a pin
+via the map UI) so the player can see exactly where they're being led,
+not just infer it from chat. `GuideState` tracks the created marker's id,
+created once on first target resolution, removed on every stop path
+(arrived+lingered, timed out, gave up).
+
+**Diagnostic logging** (`SeekLandmarkSensor.java`): this investigation had
+to infer everything from timing alone because nothing logged the actual
+resolved coordinate or live distance. Now logs the resolved target +
+current position + distance once per guide, plus a throttled "still
+guiding, N blocks away" line every 15s (`GuideState.shouldLogStuck()`) -
+next time something gets stuck, the log will show real numbers instead of
+one opaque give-up line.
+
+**Two more real bugs found live-testing the rewrite itself** (raw-
+completion debug logging temporarily bumped to INFO to catch these, then
+reverted to DEBUG):
+1. The model sometimes puts ALL its tags FIRST and the real spoken line
+   AFTER them (`"ACTION: OFFER_GUIDE\nGUIDE_TARGET: Old Mine\nTONE:
+   NEUTRAL\n\nI remember those tunnels well..."`) - `_parse_dialogue_
+   response()`'s truncate-at-earliest-tag logic assumed tags always came
+   after the spoken text, so this order left `text` empty even though
+   ACTION/GUIDE_TARGET parsed fine. Fixed by tracking `tag_end` alongside
+   `tag_start` and falling back to whatever real text follows the tags
+   when nothing usable precedes them.
+2. The model can re-emit a tag a SECOND time, after the real spoken line
+   (`"...Lead the way! ACTION: ACCEPT_TAME"` tacked onto the end when
+   `ACTION: OFFER_GUIDE` already appeared, and was already consumed, at
+   the start) - `.search()` only finds each pattern's FIRST match, so the
+   later duplicate leaked straight into the displayed text. Fixed with a
+   new `_strip_tag_region()` pass that re-scans whichever text segment
+   was ultimately chosen and truncates at any tag-shaped token still
+   inside it.
+
+Both verified with a 5-case regression battery (`_parse_dialogue_
+response`, run directly, no live model needed) covering: tags-before-text,
+tags-after-text, the original hallucinated-trailing-ramble case, a
+malformed-tag-typo case, and the new duplicate-tag case - all pass.
+
+**Verified live**: `./gradlew build`/`runServer` boot-tested clean, jar
+rebuilt/reinstalled, orchestrator rebuilt/redeployed. Ran repeated real
+WebSocket turns against the live model with a realistic situation string
+(matching `describe()`'s new output shape) - consistently correct,
+grounded guide_target extraction (player's own marker names, real zone
+names), honest "I haven't been there" for anything not in the candidate
+list, no fabricated backstories/distances, and real spoken text present
+on nearly every turn (the rare remaining empty reply is this system's
+existing, deliberate "nothing to say this turn" behavior, not a new
+failure). **Not yet confirmable from here**: the actual Java-side wiring
+(marker creation/visibility on the real client, whether the diagnostic
+logging reveals a *new* root cause if a guide gets stuck again) - these
+need the user's own next play session.
+
 ## Tuning table
 
 See README.md — it maps symptoms (slow dialogue, world stutter, OOM) to the

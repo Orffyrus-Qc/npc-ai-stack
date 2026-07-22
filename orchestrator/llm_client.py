@@ -205,16 +205,20 @@ NONE. This distinction matters mechanically, not just narratively - tagging \
 OFFER_GUIDE here sends you walking AWAY from the player toward the nearest known \
 landmark instead of staying at their side, the opposite of what "follow me" asked for.
 - If ACTION is OFFER_GUIDE, also output another line, "GUIDE_TARGET: " followed by \
-a short keyword for what kind of place the player actually wants to find - e.g. \
-"water", "desert", "temple", "cave", "ruins", "forest". Extract this from what \
-they said even if you're not sure of the exact real place name; a rough keyword is \
-enough to search by. If they just said something generic like "take me somewhere \
-interesting" with no real destination in mind, use "GUIDE_TARGET: landmark". BUT \
-if the player refers to a SPECIFIC place by a name someone would have actually \
-given it - "home", "my base", "the mine", "Steve's fort" - rather than a general \
-category, use that exact name/phrase as the keyword instead of generalizing it \
-into a category word. They may have personally marked that exact spot, and a \
-made-up category guess would miss it entirely.
+a short keyword for what kind of place the player actually wants to find. Your \
+"Current situation" above lists the REAL nearby places you actually know about \
+("Nearby landmarks you know of") and the player's own real marked places \
+("Your own marked places") - if what the player asked for reasonably matches one \
+of those, use ITS EXACT NAME as the keyword, not a generalized category. Only \
+when NOTHING in your current situation matches what they asked for, fall back to \
+a short generic category guess - e.g. "water", "desert", "temple", "cave", \
+"ruins", "forest" - and even then, do NOT invent a specific name, backstory, \
+distance, or direction for a place you don't actually have listed above; the \
+same "admit the edges of your own knowledge" honesty that applies to Hytale lore \
+questions applies here too - a vague "let's see if we can find one" beats a \
+confident, made-up "it's 10 paces east" for a place that doesn't exist. If they \
+just said something generic like "take me somewhere interesting" with no real \
+destination in mind, use "GUIDE_TARGET: landmark".
 - Also output a second tag, on its own line, judging how the player treated \
 YOU personally in THIS message only (not their history, not the world) - \
 "TONE: KIND", "TONE: RUDE", or "TONE: NEUTRAL". KIND means real warmth, \
@@ -357,6 +361,35 @@ _GUIDE_TARGET_TAG_RE = re.compile(
 # specific regex above.
 _GENERIC_TAG_RE = re.compile(r"\b[A-Z][A-Z_]{2,24}:(?:\s|$)")
 
+_ALL_TAG_PATTERNS = (
+    _ACTION_TAG_RE, _TONE_TAG_RE, _THREAD_TAG_RE,
+    _GUIDE_TARGET_TAG_RE, _THREAD_SUMMARY_TAG_RE, _GENERIC_TAG_RE,
+)
+
+
+def _strip_tag_region(text: str) -> str:
+    """
+    Truncates at the earliest tag-shaped token found INSIDE `text`, if any.
+    Real bug found live 2026-07-22 testing the navigation rewrite: the
+    model sometimes re-emits a tag a SECOND time, after the real spoken
+    line (e.g. "...Lead the way! ACTION: ACCEPT_TAME" tacked onto the end,
+    when "ACTION: OFFER_GUIDE" already appeared - and was already consumed -
+    at the very start). `_parse_dialogue_response()`'s tag_start/tag_end
+    only track each pattern's FIRST match in the whole raw completion (via
+    `.search()`), so a later, duplicate tag past that point was never
+    excluded and leaked straight into the displayed text. This re-scans
+    whichever text segment was ultimately selected (leading or trailing)
+    and truncates at any tag-shaped token still inside it - a no-op for the
+    common case (that segment was already tag-free by construction), but
+    catches this duplicate-tag case wherever it appears.
+    """
+    earliest = len(text)
+    for pattern in _ALL_TAG_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            earliest = min(earliest, m.start())
+    return text[:earliest].strip().strip('"').strip()
+
 
 def _parse_dialogue_response(raw: str) -> DialogueResult:
     """
@@ -381,9 +414,21 @@ def _parse_dialogue_response(raw: str) -> DialogueResult:
     and got shown to the player as if it were dialogue. Fixed by truncating
     the spoken text at the position of the EARLIEST matched tag instead -
     everything from there on (real tags plus any hallucinated trailing
-    ramble) is tag region, not spoken text. Safe because every real,
-    observed case has tags appearing at/after the end of the spoken line,
-    never interspersed within it.
+    ramble) is tag region, not spoken text.
+
+    2026-07-22, later still, another real bug found live testing the
+    navigation rewrite: that "everything after the first tag is discarded"
+    assumption is wrong when the model puts ALL its tags FIRST and the real
+    spoken line AFTER them - confirmed via a raw-completion debug log, e.g.
+    "ACTION: OFFER_GUIDE\\nGUIDE_TARGET: Old Mine\\nTONE: NEUTRAL\\n\\nI
+    remember those tunnels well..." - the actual reply came back as "",
+    with the whole real sentence silently discarded, even though
+    ACTION/GUIDE_TARGET parsed correctly. Fixed by also tracking tag_end
+    (the furthest point any matched tag reaches) and falling back to
+    whatever real text follows it when there's nothing usable before the
+    first tag - this only ever engages when the leading fragment is empty,
+    so the original hallucinated-trailing-ramble fix above (which assumes a
+    real leading spoken line) is untouched for the tags-after-text case.
     """
     action = "none"
     tone = "neutral"
@@ -391,10 +436,12 @@ def _parse_dialogue_response(raw: str) -> DialogueResult:
     thread_summary = ""
     guide_target = ""
     tag_start = len(raw)
+    tag_end = 0
 
     m = _ACTION_TAG_RE.search(raw)
     if m:
         tag_start = min(tag_start, m.start())
+        tag_end = max(tag_end, m.end())
         candidate = m.group(1).strip().lower()
         if candidate in VALID_ACTIONS:
             action = candidate
@@ -402,16 +449,19 @@ def _parse_dialogue_response(raw: str) -> DialogueResult:
         m = _GUIDE_TARGET_TAG_RE.search(raw)
         if m:
             tag_start = min(tag_start, m.start())
+            tag_end = max(tag_end, m.end())
             guide_target = m.group(1).strip().strip('"').strip().lower()
     m = _TONE_TAG_RE.search(raw)
     if m:
         tag_start = min(tag_start, m.start())
+        tag_end = max(tag_end, m.end())
         candidate = m.group(1).strip().lower()
         if candidate in VALID_TONES:
             tone = candidate
     m = _THREAD_TAG_RE.search(raw)
     if m:
         tag_start = min(tag_start, m.start())
+        tag_end = max(tag_end, m.end())
         candidate = m.group(1).strip().lower()
         if candidate in VALID_THREAD_ACTIONS:
             thread_action = candidate
@@ -419,6 +469,7 @@ def _parse_dialogue_response(raw: str) -> DialogueResult:
         m = _THREAD_SUMMARY_TAG_RE.search(raw)
         if m:
             tag_start = min(tag_start, m.start())
+            tag_end = max(tag_end, m.end())
             thread_summary = m.group(1).strip().strip('"').strip()
         if not thread_summary:
             # OPEN with no usable summary isn't worth tracking - there'd be
@@ -430,12 +481,15 @@ def _parse_dialogue_response(raw: str) -> DialogueResult:
     # variant, or a genuinely new tag this function doesn't know about yet),
     # so it still gets excluded from the spoken text even though its value
     # couldn't be parsed. Harmless overlap with the specific matches above -
-    # taking the minimum just reinforces the same (or an earlier) cutoff.
+    # taking the min/max just reinforces the same (or a wider) cutoff.
     m = _GENERIC_TAG_RE.search(raw)
     if m:
         tag_start = min(tag_start, m.start())
+        tag_end = max(tag_end, m.end())
 
-    text = raw[:tag_start].strip().strip('"').strip()
+    text_before = raw[:tag_start].strip().strip('"').strip()
+    text_after = raw[tag_end:].strip().strip('"').strip()
+    text = _strip_tag_region(text_before if text_before else text_after)
     return DialogueResult(text=text, action=action, tone=tone,
                            thread_action=thread_action, thread_summary=thread_summary,
                            guide_target=guide_target)
@@ -508,6 +562,14 @@ class LlamaClient:
             repeat_penalty=1.15,
             presence_penalty=0.4,
         )
+        # Debug-only: the raw completion before any tag-stripping. Added
+        # 2026-07-22 after live testing turned up empty spoken text on some
+        # OFFER_GUIDE turns even though ACTION/GUIDE_TARGET parsed fine -
+        # without this there was no way to tell "model said nothing but
+        # tags" apart from "a parsing bug ate real text" (see
+        # ambient_line()'s docstring - the same "reply that's only the tag"
+        # failure mode is already a known, separate pre-existing issue).
+        logger.debug("raw completion for %s: %r", ctx.npc_id, raw)
         return _parse_dialogue_response(raw)
 
     async def ambient_line(self, ctx: NPCContext, situation: str) -> str:
