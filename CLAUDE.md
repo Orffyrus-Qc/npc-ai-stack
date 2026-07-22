@@ -874,6 +874,54 @@ and reinstalled, orchestrator redeployed. Not yet re-confirmed live (both
 fixes are directly verified against the real captured failure text/log
 lines, but need a fresh play session to confirm they don't recur).
 
+## 2026-07-22, later still: "can you make it work" - real end-to-end testing against the live model found one more real bug
+
+User asked, after the two log-based fixes above, "can you make it work."
+Answered honestly: full in-game confirmation genuinely needs a real
+connected client, which only the user can drive - but everything tested
+so far (boot validation, reflection calls against compiled Java methods)
+had only ever exercised HAND-CRAFTED test strings, never the actual
+model's real output through the full live pipeline. Closed that gap:
+wrote a real WebSocket client (`ws_realcheck.py`, scratchpad) that
+connects to the actual running orchestrator exactly like the Java plugin
+does, sends real "dialogue" messages, and gets back real replies from the
+real Qwen2.5-7B model - a genuine end-to-end integration test, no
+synthetic strings.
+
+**Found a real bug the synthetic tests missed on the very first run**:
+asking "can you take me to a temple?" against the live model returned
+`guide_target: 'temple tone: neutral thread: none'` - not just `'temple'`.
+Root cause: this model reliably crams every tag onto the SAME line with
+no newlines between them (`"...GUIDE_TARGET: temple TONE: NEUTRAL
+THREAD: NONE"`), and `_GUIDE_TARGET_TAG_RE`/`_THREAD_SUMMARY_TAG_RE`'s
+free-text capture only knew to stop at a newline or end-of-string -
+neither exists mid-line, so it swallowed every tag after it into the
+captured value. All of today's earlier synthetic tests happened to use
+either newline-separated tags or a single trailing tag, so this exact
+failure mode was never exercised until a real model call actually hit it.
+
+Fixed both regexes with a lookahead that also stops the capture at
+whitespace immediately followed by another tag-shaped `CAPSWORD:` token,
+not just a newline or end-of-string. Verified against the exact failure
+pattern plus a 5-case regression battery (including a legitimate
+multi-word value like "ancient ruins" - confirmed the lookahead doesn't
+cut it short), then re-ran the SAME real WebSocket test against the SAME
+live model after redeploying: `guide_target` now correctly came back as
+just `'ruins'` for a similar real request.
+
+**Bonus real confirmation while testing**: the model used a real em-dash
+in 4 of 10 live replies across this session - directly inspected the
+codepoints (`hex(ord(c))`) of one and confirmed it's a single, correct
+`0x2014` character, not the mangled multi-character text from before -
+today's earlier `ensure_ascii=False` fix is holding up against real,
+repeated live model output, not just the one reproduced case.
+
+This is as far as verification can go without an actual connected game
+client - the remaining gap (does the Java side apply all this correctly
+in a real chat bubble, does the guide/wait/flee JSON behavior tree
+actually look right in motion) genuinely needs the user's own play
+session.
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/

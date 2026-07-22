@@ -321,12 +321,23 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
 _ACTION_TAG_RE = re.compile(r"\s*ACTION\w?:\s*([A-Z_]+)\.?", re.IGNORECASE)
 _TONE_TAG_RE = re.compile(r"\s*TONE\w?:\s*([A-Z_]+)\.?", re.IGNORECASE)
 _THREAD_TAG_RE = re.compile(r"\s*THREAD\w?:\s*([A-Z_]+)\.?", re.IGNORECASE)
-# Free text, not a fixed [A-Z_]+ word like the tags above - captures to end
-# of line only (non-greedy, stops at the first newline) so a THREAD_SUMMARY
-# accidentally followed by more text on later lines doesn't get swallowed.
-_THREAD_SUMMARY_TAG_RE = re.compile(r"\s*THREAD_SUMMARY\w?:\s*(.+?)\s*(?:\n|$)", re.IGNORECASE)
-# Same free-text shape as THREAD_SUMMARY - see its comment.
-_GUIDE_TARGET_TAG_RE = re.compile(r"\s*GUIDE_TARGET\w?:\s*(.+?)\s*(?:\n|$)", re.IGNORECASE)
+# Free text, not a fixed [A-Z_]+ word like the tags above - the lookahead
+# stops the capture at whichever comes first: a newline, end of string, OR
+# whitespace immediately followed by another tag-shaped "CAPSWORD:" token.
+# That last case is a real bug found live 2026-07-22: this model reliably
+# crams every tag onto the SAME line with no newlines between them ("...
+# GUIDE_TARGET: temple TONE: NEUTRAL THREAD: NONE"), confirmed via a real
+# end-to-end WebSocket test against the live model, not just synthetic
+# strings - the original "stop at \\n or end-of-string" version had no
+# interior anchor to stop at in that case, so it swallowed every tag after
+# it into this one's captured value (observed: guide_target came back as
+# "temple tone: neutral thread: none" instead of just "temple").
+_THREAD_SUMMARY_TAG_RE = re.compile(
+    r"\s*THREAD_SUMMARY\w?:\s*(.+?)(?=\s+[A-Z][A-Z_]{2,24}:|\n|$)", re.IGNORECASE)
+# Same free-text shape and same same-line-multi-tag fix as THREAD_SUMMARY -
+# see its comment.
+_GUIDE_TARGET_TAG_RE = re.compile(
+    r"\s*GUIDE_TARGET\w?:\s*(.+?)(?=\s+[A-Z][A-Z_]{2,24}:|\n|$)", re.IGNORECASE)
 # Defense-in-depth, not a replacement for the specific regexes above: real
 # bug found live 2026-07-22 - "TONED: KIND" (a typo variant of "TONE: KIND"
 # the model produced) didn't match ANY specific tag regex at all, so
