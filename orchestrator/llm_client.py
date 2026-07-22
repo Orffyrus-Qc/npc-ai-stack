@@ -184,18 +184,10 @@ randomly blurt out unrelated trivia mid-conversation.
 just not something you have facts or memories about), be vague or curious in \
 character rather than inventing precise details you don't have.
 - Your "Current situation" may mention something you can actually see nearby by \
-its real internal name (e.g. "Plant_Flower_Common_Blue") - if the player asks \
-about it (what it looks like, its color, what kind of plant it is), describe it \
-naturally in character using what that name actually tells you (e.g. "a blue \
-flower"), never reciting the raw internal name verbatim. The player's question \
-may ASSUME something is there ("what color is the flower", "the plant between \
-us") even when your current situation mentions no such thing - do NOT play along \
-with an assumption that isn't backed by your current situation, however \
-naturally the question is phrased; flatly say you don't actually see one rather \
-than describing a color/detail for something you have no real information \
-about. This matters as much as not inventing Hytale lore facts - a specific, \
-confident answer about something that isn't there is worse than "I don't see \
-anything like that around here."
+its real internal name (e.g. "Plant_Flower_Common_Blue") - describe it naturally \
+in character using what that name tells you (e.g. "a blue flower"), never \
+reciting the raw name verbatim. If the player asks about something not actually \
+mentioned there, admit you don't see one rather than inventing a color/detail.
 - Check "Things YOU remember" above before you speak: if it shows you already said \
 something very close to what you're about to say again, DO NOT repeat that same \
 line - a real person doesn't say the exact same sentence every time they're greeted. \
@@ -274,13 +266,30 @@ your trust in them is high enough that you'd truly agree."""
 # unrelated caller wrapping a large summarization prompt in this same
 # template - see main.py's low_prio_llm fix). Facts/memories are free-form
 # LLM-generated text with no hard length cap of their own, so counts alone
-# can't guarantee the assembled prompt fits a 2048-token slot
-# (docker-compose.yml's --ctx-size/--parallel). This estimate doesn't need
-# to be exact, just conservative enough that the real tokenizer's count
-# stays under the true limit with margin for the chat template's own
-# overhead and this request's max_tokens completion budget.
+# can't guarantee the assembled prompt fits a slot (docker-compose.yml's
+# --ctx-size/--parallel). This estimate doesn't need to be exact, just
+# conservative enough that the real tokenizer's count stays under the true
+# limit with margin for the chat template's own overhead and this
+# request's max_tokens completion budget.
+#
+# 2026-07-22 real incident: this budget only ever capped facts/memories -
+# nothing capped SYSTEM_TEMPLATE's own fixed instructional text, which grew
+# across several real feature additions today (guide-target grounding,
+# environment-sensing rules) until the assembled prompt hit ~2098 tokens
+# against a 2048-token slot - confirmed via llama.cpp's own real error log
+# ("request (2098 tokens) exceeds the available context size (2048
+# tokens)"), which silently failed every single dialogue call (caught by
+# the dispatcher's generic exception handler, returned as empty text -
+# indistinguishable from "the NPC has nothing to say," which is exactly
+# what a live "press use, nothing happens" report looked like). Fixed two
+# ways: trimmed the least load-bearing new instruction text (the "don't
+# assume the premise" flower-honesty rule, confirmed via live testing
+# earlier today to not even change model behavior - pure token cost for
+# zero benefit) and gave real headroom by raising --ctx-size (12288 ->
+# 18432, GPU memory confirmed to have room via nvidia-smi earlier today)
+# to 3072 tokens/slot instead of 2048.
 _CHARS_PER_TOKEN_ESTIMATE = 4
-_PROMPT_TOKEN_BUDGET = 1700
+_PROMPT_TOKEN_BUDGET = 2400
 
 
 def _approx_tokens(text: str) -> int:

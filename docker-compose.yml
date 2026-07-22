@@ -14,7 +14,7 @@ services:
     command: >
       --model /models/${LLM_MODEL_FILE:-qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf}
       --n-gpu-layers 999
-      --ctx-size 12288
+      --ctx-size 18432
       --parallel 6
       --cont-batching
       --batch-size 512

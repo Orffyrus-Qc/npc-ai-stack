@@ -2189,6 +2189,55 @@ same prompt instruction already covers it. Genuinely cannot verify the
 eye-height/direction math is exactly right without a live player actually
 pointing at a real flower - that needs the user's own play session.
 
+## 2026-07-22, later still: "when I press use on npc nothing happen" - my own prompt growth silently broke every dialogue call
+
+User: "when I press use on npc nothing happen." Checked real evidence
+before guessing, per this project's own triage order: two separate real
+sessions, four separate NPC spawns, ZERO successful interactions logged,
+no server-side exceptions in the Hytale log. Asked a clarifying question
+first since the log alone didn't pin down where the failure was - the
+interact hint/prompt DID show (so `CanInteract`/`SetInteractable` was
+fine), but pressing use produced nothing at all, which meant the actual
+`TalkToAIAction` -> orchestrator round trip specifically.
+
+`docker compose ps` showed all 4 containers had restarted simultaneously
+around the same time as one of my own `docker compose up -d --build`
+redeploys earlier today - a real, if ultimately unrelated, lead. The real
+cause was in `docker compose logs orchestrator`: `httpx.HTTPStatusError:
+400 Bad Request` on every single dialogue call. `docker compose logs
+llm-inference` gave the exact number: `request (2098 tokens) exceeds the
+available context size (2048 tokens)`.
+
+**Root cause: my own prompt-lengthening edits today.** Across the guide-
+grounding rewrite and the environment-sensing work, I added three new
+instruction paragraphs to `SYSTEM_TEMPLATE` - none of them individually
+alarming, but `_PROMPT_TOKEN_BUDGET` (1700) only ever capped facts/
+memories, never the FIXED template text itself. Combined with real
+memories/facts my own live-model testing kept re-accumulating for the
+real player UUID even after the earlier full memory reset, the total
+prompt crossed 2048 tokens. The dispatcher's generic exception handler
+caught the 400 (by design, from the earlier "GPU busy" fallback logic)
+and returned empty text - indistinguishable from "the NPC has nothing to
+say," which is exactly what "press use, nothing happens" looks like from
+the player's side. Not a crash, not a JSON/interaction bug - a silent,
+solely-server-side prompt overflow.
+
+**Fixed two ways**: (1) trimmed the least load-bearing addition - the
+"don't play along with an assumed premise" flower-honesty instruction,
+which live testing earlier today already confirmed changed model behavior
+0/10 times - pure token cost for zero measured benefit, an easy, safe
+cut. (2) Raised real headroom: `--ctx-size` 12288 -> 18432 (parallel
+unchanged at 6 - this doesn't repeat the earlier `--parallel` mistake,
+since GPU memory headroom for this was already confirmed via `nvidia-smi`
+during that investigation, and this changes memory allocation only, not
+concurrency/throughput), giving 3072 tokens/slot instead of 2048.
+`_PROMPT_TOKEN_BUDGET` raised 1700 -> 2400 to match.
+
+**Verified live**: re-ran the exact same dialogue request shape that was
+failing, using the real player UUID - real reply came back correctly,
+confirmed via `docker compose logs llm-inference` that no
+context-overflow error occurred on the successful call.
+
 ## Tuning table
 
 See README.md — it maps symptoms (slow dialogue, world stutter, OOM) to the

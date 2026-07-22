@@ -285,6 +285,22 @@ for +227MB VRAM, with 5.5GB still free for headroom. `main.py`'s
 `--parallel` here, change that too or the orchestrator will simply never
 use the extra slots.
 
+**2026-07-22: `--ctx-size` raised again, 12288 -> 18432 (`--parallel`
+unchanged at 6, so still 6 real slots - this is a memory-only change, not
+a repeat of the `--parallel` tuning above), after a real live incident:**
+prompt-lengthening across several real feature additions the same day
+(guide-target grounding, environment sensing) pushed the assembled
+dialogue prompt to ~2098 tokens against the 2048-token slot size -
+confirmed via llama.cpp's own error log (`request (2098 tokens) exceeds
+the available context size (2048 tokens)`) - which silently failed every
+dialogue call (caught by the dispatcher's generic exception handler,
+indistinguishable from "the NPC has nothing to say" - a live "press use,
+nothing happens" report was how this actually surfaced). Now 3072
+tokens/slot; `llm_client.py`'s `_PROMPT_TOKEN_BUDGET` raised 1700 -> 2400
+to match. GPU headroom for this was already confirmed via `nvidia-smi`
+during the `--parallel` investigation above (~6.3GB used of 12GB at the
+old ctx-size) - now ~6.6GB used, still comfortable.
+
 ## Tuning knobs
 
 | Symptom | Knob |
