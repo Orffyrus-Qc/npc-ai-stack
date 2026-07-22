@@ -61,6 +61,8 @@ from personality import PersonalityStore
 from priority_queue import NPCRequestDispatcher
 from skill_runtime import SkillRuntime
 from taming import TamingStore
+from wiki_ingest import run_ingest_cycle
+from wiki_knowledge import WikiKnowledgeStore
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("npc.orchestrator")
@@ -107,7 +109,14 @@ LLM = LlamaClient()
 MEMORY = MemoryStore()
 PERSONALITY = PersonalityStore()
 TAMING = TamingStore()
+WIKI = WikiKnowledgeStore()
 SKILLS = SkillRuntime(Path(os.environ.get("SANDBOX_DIR", "/sandbox")))
+
+# How often wiki_refresh_daemon() re-crawls hytale.fandom.com - see that
+# function. Wiki content doesn't change hour to hour, and run_ingest_cycle()
+# already skips unchanged pages cheaply via a batched revision-id check, so
+# a daily cadence is plenty rather than genuinely wasteful.
+WIKI_REFRESH_INTERVAL_S = 24 * 3600
 
 # Minimum felt delay for a dialogue reply - see handle_dialogue()'s comment
 # at the return site. 1.3s sits comfortably above this stack's own p50
@@ -143,6 +152,7 @@ async def _build_context(msg: dict) -> NPCContext:
     facts = await MEMORY.get_facts(npc_id, player_id or None)
 
     memories: list[str] = []
+    wiki_snippets: list[str] = []
     if player_id and (msg.get("text") or msg.get("situation")):
         query = msg.get("text", msg.get("situation", ""))
         # Recent-first (chronological - lets the NPC bring up "last time we
@@ -156,6 +166,13 @@ async def _build_context(msg: dict) -> NPCContext:
         for m in similar:
             if m not in memories:
                 memories.append(m)
+        # Local Qdrant similarity search only - wiki_ingest.py is the only
+        # place this stack ever makes a live request to the actual wiki, so
+        # a real conversation never waits on (or depends on) external
+        # network access. Gated the same way memories are (only real
+        # player-directed turns, never ambient) since there's no query to
+        # match against otherwise.
+        wiki_snippets = await WIKI.search(query)
 
     owner = await TAMING.get_owner(npc_id)
     is_companion = bool(player_id) and owner == player_id
@@ -165,6 +182,7 @@ async def _build_context(msg: dict) -> NPCContext:
         personality=persona,
         semantic_facts=facts,
         recent_memories=memories,
+        wiki_snippets=wiki_snippets,
         location_hint=msg.get("situation", ""),
         is_companion=is_companion,
         player_name=msg.get("player_name", ""),
@@ -422,11 +440,33 @@ async def compression_daemon() -> None:
             logger.exception("compression sweep error")
 
 
+async def wiki_refresh_daemon() -> None:
+    """
+    Periodic Hytale-wiki re-crawl (wiki_ingest.py). Unlike compression_daemon
+    above, this runs ONE cycle immediately on startup rather than sleeping
+    first - a fresh deployment should get real wiki knowledge right away,
+    not wait a full WIKI_REFRESH_INTERVAL_S before the first player ever gets
+    a grounded answer. run_ingest_cycle() is cheap to re-run redundantly
+    (a batched revision-id check skips anything unchanged), so running once
+    here even if a manual `python wiki_ingest.py` seed already just happened
+    costs almost nothing.
+    """
+    while True:
+        try:
+            summary = await run_ingest_cycle(WIKI)
+            logger.info("wiki refresh cycle: %s", summary)
+        except Exception:
+            logger.exception("wiki refresh cycle error")
+        await asyncio.sleep(WIKI_REFRESH_INTERVAL_S)
+
+
 async def main() -> None:
     await MEMORY.start()
     await PERSONALITY.start()
     await TAMING.start()
+    await WIKI.start()
     _spawn(compression_daemon())
+    _spawn(wiki_refresh_daemon())
     async with websockets.serve(plugin_connection, "0.0.0.0", 8765,
                                 ping_interval=20, ping_timeout=20):
         logger.info("orchestrator listening on :8765")

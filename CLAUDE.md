@@ -270,6 +270,114 @@ placeholder) - not yet live-confirmed against the real model (prompt
 *wording* quality needs a real conversation to judge, same limitation as
 every other persona-only change this session).
 
+## 2026-07-22, later still: real Hytale-wiki knowledge base, semantic search, scheduled refresh - confirmed live against the actual wiki
+
+Phase 3 of the re-plan, the biggest new piece: "AI NPC can access internet
+to learn more about Hytale (into Hytale wiki first)." User picked the more
+ambitious options for this - full semantic-search knowledge base (not a
+small hardcoded fact list) with scheduled recurring refresh.
+
+**Found the real wiki first, didn't guess a URL.** `hytale.fandom.com` -
+standard MediaWiki, confirmed real and live (its own homepage: "Animals,
+Monsters, Races, Items, Zones, Alterverses" categories - exactly the
+Adventurer-relevant content this needs) via the Browser tool, since
+`WebFetch` itself got an HTTP 402 hitting it directly (a restriction on
+that specific tool's fetch proxy, not the wiki - confirmed by the Browser
+tool reaching `hytale.fandom.com/api.php` directly with a real 200 and
+real JSON). `action=parse&prop=wikitext` returns clean-ish raw wikitext
+markup, which turned out easier to strip to plain prose via a lightweight
+`re`-based cleaner than parsing rendered HTML would have been - so this
+needed **zero new pip dependencies** (`httpx` was already in
+`requirements.txt` for the llama.cpp calls; no `beautifulsoup4` needed).
+
+**New `orchestrator/embedding.py`**: extracted the shared `fastembed`
+`TextEmbedding` instance (`memory.py` used to construct its own privately)
+into a lazy singleton, so a second store needing embeddings doesn't
+double the real ONNX-model-load cost. `memory.py` now imports
+`embed()`/`EMBED_DIM` from here instead of owning its own copy.
+
+**New `orchestrator/wiki_knowledge.py`**: `WikiKnowledgeStore`, a second
+Qdrant collection (`wiki_knowledge`, separate from `npc_episodic` -
+different lifecycle, different query shape, no npc/player scoping needed).
+`search(query, limit)` mirrors `recall_similar()`'s shape. Point ids are
+`uuid5(NAMESPACE_URL, f"{title}:{chunk_index}")` - **not** a raw string
+like `"Adamantite:0"`, which client-side `PointStruct` construction
+accepts without complaint but Qdrant's real server-side constraint
+(unsigned int or real UUID only) would likely reject - caught this via a
+quick local test against the installed `qdrant-client` before ever hitting
+the real server with it.
+
+**New `orchestrator/wiki_ingest.py`**: the offline crawler, same
+"not started by `docker compose up`" shape as `skill_writer.py` (also
+runnable directly: `docker compose exec orchestrator python
+wiki_ingest.py`). Two-phase and incremental: a cheap BATCHED
+revision-id check (`action=query&prop=revisions`, 50 titles/call - the
+real MediaWiki per-request cap) against what's already stored, then the
+heavier fetch+clean+chunk+embed step only for pages that are new or
+changed. This is the ONLY place this whole stack ever makes a live request
+to an external site - a real dialogue turn only ever queries the
+already-ingested, local Qdrant collection, so a conversation never waits
+on (or depends on) live internet access.
+
+The wikitext-to-prose cleaner went through 3 real rounds of "run it
+against the actual live wiki, look at what came out, fix the artifact"
+rather than being trusted on synthetic examples alone:
+1. `{{templates}}`/`<gallery>`/`<ref>`/`[[links]]`/`'''bold'''` handled
+   from the start - worked cleanly against a real `Adamantite` page.
+2. **Live-tested against the real wiki, found real noise**: crafting-recipe
+   wikitables (`{| class="fandom-table" ... |}` - different syntax from
+   `{{templates}}`, single braces + pipe-delimited rows) were leaking raw
+   markup into chunks (seen live in the real "Adamantite Hatchet" page's
+   embedded content). Added `_TABLE_RE`.
+3. **Live-tested again, found more real noise**: `[[Category:Weapons]]`
+   tags (page metadata, not prose) were being converted by the generic
+   link-regex into stray trailing "Category:Weapons" lines (seen live in
+   the real "Adamantite Battleaxe" page). Added `_CATEGORY_RE` to strip
+   them outright before the generic link converter runs.
+
+**Wired into the live prompt**: `NPCContext.wiki_snippets`, rendered as a
+new "Hytale lore you've picked up in your travels:" section in
+`SYSTEM_TEMPLATE`, alongside "Things you know" in the existing
+expert-hedging rule (Phase 2). `main.py`'s `_build_context()` queries
+`WIKI.search(query, limit=3)` gated the same way memories are (only real
+player-directed dialogue, never ambient - there's no query to match
+against otherwise). New `MAX_WIKI_SNIPPETS` cap and inclusion in
+`build_dialogue_messages()`'s token-budget trim loop (wiki chunks run up
+to ~300 tokens each - far bigger per-item than a fact/memory line, real
+overflow risk otherwise); the trim loop now pops from whichever of
+facts/memories/wiki is currently longest rather than just alternating
+between two lists.
+
+**`wiki_refresh_daemon()`** in `main.py` mirrors `compression_daemon()`'s
+exact shape (`while True: sleep; try: ...; except: log`), spawned the same
+way via `_spawn()` - but runs ONE cycle immediately on startup rather than
+sleeping `WIKI_REFRESH_INTERVAL_S` (24h) first, since a fresh deployment
+should get real wiki knowledge right away, not wait a full day. Cheap to
+re-run redundantly (the revision-id check skips anything unchanged).
+
+**Confirmed live against the real wiki and the real running stack** (not
+just boot-tested): `docker compose up -d --build orchestrator`, watched
+real logs - real pagination through `hytale.fandom.com/api.php`, real
+page titles (Trork, Kweebec, Goblin, Outlander, Scarak, Zone 1-6,
+Adamantite, ...), real Qdrant writes. Queried the collection directly
+mid-crawl: `store.search("what is Adamantite used for")` returned the 3
+correct, real, on-topic chunks. Also confirmed the token-budget trim loop
+holds under a synthetic worst-case (oversized facts + memories + wiki all
+at once, stayed within `_PROMPT_TOKEN_BUDGET`). Not yet confirmed with a
+real player's dialogue turn actually surfacing wiki knowledge in a live
+conversation (needs a real client) - the corpus was also still populating
+(a full first crawl of a wiki this size takes real wall-clock time, rate-
+limited by `PAGE_FETCH_DELAY_S`) as of this entry; `wiki_refresh_daemon`
+keeps filling it in on its own regardless.
+
+Noticed in passing, not fixed (out of scope for this pass): the
+orchestrator's fastembed/HuggingFace model cache
+(`Dockerfile`'s `HOME=/app/.cache`) isn't a mounted volume, so every
+`docker compose up --build` recreate re-downloads the ~130MB ONNX model
+from HuggingFace instead of reusing a prior download. Pre-existing, not
+introduced by this change - would be a quick follow-up (add a named
+volume) if restart frequency ever makes it worth the wait.
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/

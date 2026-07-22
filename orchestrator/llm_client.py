@@ -63,6 +63,7 @@ class NPCContext:
     personality: Personality
     semantic_facts: list[str] = field(default_factory=list)   # from fact-db
     recent_memories: list[str] = field(default_factory=list)  # from vector db
+    wiki_snippets: list[str] = field(default_factory=list)    # from wiki_knowledge.py
     location_hint: str = ""         # "at the forge, midday"
     is_companion: bool = False      # tamed by the player currently talking (see taming.py)
     player_name: str = ""           # the real player username, not their UUID
@@ -103,6 +104,12 @@ MAX_MEMORIES = 4   # slots are ~2048 tokens each: budget the context hard
 # budget overall, so this eats into headroom other NPCs don't use.
 MAX_FACTS_COMPANION = 12
 MAX_MEMORIES_COMPANION = 10
+# Wiki chunks run up to ~300 tokens each (wiki_ingest.py's CHUNK_CHARS) -
+# far longer per-item than a fact/memory line - so even main.py's own
+# WIKI.search(limit=3) leaves real token-budget risk; re-capped here for
+# defense-in-depth the same way facts/memories are, and included in the
+# trim loop below.
+MAX_WIKI_SNIPPETS = 3
 
 COMPANION_LINE = (
     "\nThis player has tamed you - you're their loyal companion, not just an "
@@ -124,6 +131,9 @@ Your temperament: {personality}.
 Things you know:
 {facts}
 
+Hytale lore you've picked up in your travels:
+{wiki_lore}
+
 Things YOU remember from real past conversations with THIS exact player \
 (not something you're guessing - this actually happened between you two):
 {memories}
@@ -138,12 +148,12 @@ you actually do know the answer. Being specific here is what makes you feel like
 you truly know this player, which matters more than sounding aloof.
 - If the player asks something about Hytale itself - a creature, a place, how to \
 survive or craft something, anything a seasoned adventurer would know - answer \
-confidently and specifically if it's covered in "Things you know" above. If it is \
-NOT covered there (or anywhere else in this prompt), say so honestly in character \
-- you haven't run into that yourself, or it's outside what you know - rather than \
-inventing a confident-sounding answer. A real expert admits the edges of their own \
-knowledge instead of bluffing; a wrong "expert" answer is worse than an honest "I \
-don't know."
+confidently and specifically if it's covered in "Things you know" or "Hytale lore \
+you've picked up in your travels" above. If it is NOT covered there (or anywhere \
+else in this prompt), say so honestly in character - you haven't run into that \
+yourself, or it's outside what you know - rather than inventing a confident-sounding \
+answer. A real expert admits the edges of their own knowledge instead of bluffing; \
+a wrong "expert" answer is worse than an honest "I don't know."
 - For anything else NOT covered anywhere above (not a Hytale-knowledge question, \
 just not something you have facts or memories about), be vague or curious in \
 character rather than inventing precise details you don't have.
@@ -220,12 +230,14 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
     # least-relevant entries first.
     facts_list = list(ctx.semantic_facts[:max_facts])
     memories_list = list(ctx.recent_memories[:max_memories])
+    wiki_list = list(ctx.wiki_snippets[:MAX_WIKI_SNIPPETS])
     location_line = f"Current situation: {ctx.location_hint}" if ctx.location_hint else ""
     companion_line = COMPANION_LINE if ctx.is_companion else ""
 
     def render() -> str:
         facts = "\n".join(f"- {f}" for f in facts_list) or "- (nothing notable)"
         memories = "\n".join(f"- {m}" for m in memories_list) or "- (first meeting)"
+        wiki_lore = "\n".join(f"- {w}" for w in wiki_list) or "- (nothing relevant comes to mind)"
         return SYSTEM_TEMPLATE.format(
             name=ctx.name,
             player_name=ctx.player_name or "a traveler whose name you haven't caught",
@@ -234,19 +246,18 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
             companion_line=companion_line,
             facts=facts,
             memories=memories,
+            wiki_lore=wiki_lore,
         )
 
     system = render()
     budget = _PROMPT_TOKEN_BUDGET - _approx_tokens(player_utterance)
-    # Alternate trimming whichever list is currently longer so one can't be
-    # emptied to zero while the other stays fat - both are informative, and
-    # a companion with 100+ memories but 0 facts (or vice versa) reads worse
-    # than a slightly shorter version of both.
-    while _approx_tokens(system) > budget and (facts_list or memories_list):
-        if len(memories_list) >= len(facts_list) and memories_list:
-            memories_list.pop()
-        elif facts_list:
-            facts_list.pop()
+    # Trim whichever of the three lists is currently longest (by item count)
+    # so none of them monopolizes the budget while the others go empty -
+    # wiki chunks are the biggest per-item risk (see MAX_WIKI_SNIPPETS)
+    # since they're raw external content, not short generated lines.
+    while _approx_tokens(system) > budget and (facts_list or memories_list or wiki_list):
+        longest = max((lst for lst in (facts_list, memories_list, wiki_list) if lst), key=len)
+        longest.pop()
         system = render()
 
     return [

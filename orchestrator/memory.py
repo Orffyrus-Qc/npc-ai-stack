@@ -23,19 +23,18 @@ import uuid
 from dataclasses import dataclass
 
 import asyncpg
-from fastembed import TextEmbedding
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     Distance, FieldCondition, Filter, MatchValue, PointStruct, VectorParams,
 )
+
+from embedding import EMBED_DIM, embed
 
 logger = logging.getLogger("npc.memory")
 
 QDRANT_URL = "http://memory-db:6333"
 PG_DSN = "postgresql://npc:npc@fact-db:5432/npc"
 COLLECTION = "npc_episodic"
-EMBED_MODEL = "BAAI/bge-small-en-v1.5"   # 384-dim, fast on CPU
-EMBED_DIM = 384
 
 COMPRESS_THRESHOLD = 60   # episodic entries per NPC before compression kicks in
 COMPRESS_BATCH = 30       # oldest N entries summarized + deleted per pass
@@ -58,7 +57,6 @@ class EpisodicEntry:
 class MemoryStore:
     def __init__(self):
         self._qdrant = AsyncQdrantClient(url=QDRANT_URL)
-        self._embedder = TextEmbedding(EMBED_MODEL)  # loads ONNX model, CPU-only
         self._pg: asyncpg.Pool | None = None
 
     # -- lifecycle ----------------------------------------------------------
@@ -83,9 +81,6 @@ class MemoryStore:
                 vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
             )
 
-    def _embed(self, text: str) -> list[float]:
-        return list(next(iter(self._embedder.embed([text]))))
-
     # -- episodic -----------------------------------------------------------
 
     async def remember_episode(self, e: EpisodicEntry) -> None:
@@ -93,7 +88,7 @@ class MemoryStore:
             COLLECTION,
             points=[PointStruct(
                 id=str(uuid.uuid4()),
-                vector=self._embed(e.text),
+                vector=embed(e.text),
                 payload={"npc_id": e.npc_id, "player_id": e.player_id,
                          "text": e.text, "ts": e.ts},
             )],
@@ -113,7 +108,7 @@ class MemoryStore:
         # (qdrant-client >= ~1.10) - the response wraps hits in .points.
         result = await self._qdrant.query_points(
             COLLECTION,
-            query=self._embed(query),
+            query=embed(query),
             query_filter=Filter(must=[
                 FieldCondition(key="npc_id", match=MatchValue(value=npc_id)),
                 FieldCondition(key="player_id", match=MatchValue(value=player_id)),
