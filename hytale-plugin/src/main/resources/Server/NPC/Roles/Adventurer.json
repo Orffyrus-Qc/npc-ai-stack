@@ -80,11 +80,17 @@
           },
           "Instructions": [
             {
-              "$Comment": "Watch nearby players with head",
+              "$Comment": "Watch nearby players with head - but NOT while fighting/chasing a hostile (see the And+Not below). 2026-07-22: this node has Continue:true so it ran every tick regardless of what else matched, competing with the melee/chase combat nodes' own HeadMotion:Watch (which watches the locked hostile Target, confirmed via disassembly of HeadMotionWatch.computeSteering() - it resolves its target from THIS node's own Sensor-derived InfoProvider, not some single global 'last write wins' state) - live-reported bug: the companion kept looking at its owner instead of the monster it was fighting/charging at. Fixed by making this node simply not match at all while any hostile is locked (Target sensor with a generously large Range, functioning as 'is anything currently locked as Target regardless of distance') rather than relying on unverified assumptions about which of two simultaneously-matching HeadMotion assignments would win.",
               "Continue": true,
               "Sensor": {
-                "Type": "Player",
-                "Range": 12
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "Player", "Range": 12 },
+                  {
+                    "Type": "Not",
+                    "Sensor": { "Type": "Target", "Range": 999 }
+                  }
+                ]
               },
               "HeadMotion": {
                 "Type": "Watch"
@@ -238,13 +244,16 @@
               }
             },
             {
-              "$Comment": "Companion combat, chase: hostile locked as Target but not yet in melee range - close the distance. Takes priority over following the player (no Continue) whenever a hostile is being chased.",
+              "$Comment": "Companion combat, chase: hostile locked as Target but not yet in melee range - close the distance. Takes priority over following the player (no Continue) whenever a hostile is being chased. HeadMotion:Watch added 2026-07-22 alongside the fix above that stops the player-watch node from competing during combat - watches the locked hostile (same Target sensor context the melee block below already uses for its own HeadMotion:Watch) so the companion visibly looks at what it's charging toward instead of having no head motion at all.",
               "Sensor": {
                 "Type": "And",
                 "Sensors": [
                   { "Type": "IsCompanion" },
                   { "Type": "Target", "Range": 20 }
                 ]
+              },
+              "HeadMotion": {
+                "Type": "Watch"
               },
               "BodyMotion": {
                 "Type": "Seek",

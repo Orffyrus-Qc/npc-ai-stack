@@ -1,5 +1,25 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: companion no longer stares at its owner mid-fight
+
+Live-tested report: "when npc is in combat mode then disable npc looking at
+compagnon player." Root cause confirmed via disassembly, not assumed: the
+Watching state's player-watch node (`Continue: true`, `HeadMotion: Watch`)
+runs every tick regardless of what else matches, and the combat nodes set
+their own competing `HeadMotion: Watch` (targeting the locked hostile) -
+`HeadMotionWatch.computeSteering()` resolves its target from whichever
+node's own Sensor context is active, with no verified guarantee about which
+of two same-tick assignments wins. Fixed by making the player-watch node
+simply not match at all while a hostile is locked (`And`+`Not`+`Target,
+Range: 999` - confirmed via disassembly of `SensorTarget.matches()` that
+`Range` checks distance to whatever's already locked, so a large value
+means "anything locked, regardless of distance") rather than relying on
+unverified priority semantics. Also added `HeadMotion: Watch` to the chase
+node (melee already had one, chase didn't) so the companion looks at the
+hostile while closing distance, not nothing. Boot-tested via a real
+`./gradlew runServer` boot - clean validation, jar rebuilt and reinstalled.
+Not yet live-confirmed (needs a real fight to watch during).
+
 ## 2026-07-22: re-scoped to a single NPC (Adventurer only)
 
 Project re-planned around a single NPC. `Elder_Miri.json`, `Merchant_Oskar.json`,

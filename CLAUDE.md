@@ -434,6 +434,44 @@ correctly. Not yet confirmed with a real model actually deciding
 THREAD: OPEN/RESOLVE in a live conversation (needs a real client;
 everything downstream of that decision is now proven correct).
 
+## 2026-07-22, later still: companion no longer stares at its owner mid-fight
+
+User, live-testing the just-shipped Adventurer companion: "when npc is in
+combat mode then disable npc looking at compagnon player."
+
+**Root cause, confirmed via disassembly rather than assumed**: the
+Watching state's "watch nearby players with head" node
+(`Continue: true`, `Sensor: {Player, Range: 12}`, `HeadMotion: Watch`)
+runs on EVERY tick regardless of what else matches, since `Continue: true`
+means sibling evaluation keeps going. The melee-attack and chase combat
+nodes (both gated on a locked `Target`) also set their own
+`HeadMotion: Watch` (melee already did; chase didn't - see below) -
+disassembling `HeadMotionWatch.computeSteering()` confirmed it resolves
+its watched entity from THAT node's own Sensor-derived `InfoProvider`, not
+some single global "whoever's being watched" state. With two nodes
+potentially setting competing `HeadMotion` values in the same tick and no
+verified guarantee about which one wins, the safe fix isn't to guess at
+override-priority semantics - it's to stop the player-watch node from
+matching at all while a hostile is locked.
+
+**Fix**: wrapped the player-watch node's sensor in
+`{"And": [{"Player","Range":12}, {"Not": {"Target","Range":999}}]}` -
+confirmed via disassembly of `SensorTarget.matches()` that `Target`'s
+`Range` checks whether the currently-locked target (via
+`MarkedEntitySupport`) is within that distance, so `Range: 999` functions
+as "is anything at all currently locked as Target" regardless of how far
+a chase might have carried it. This node now simply doesn't fire during
+combat, so there's no competing assignment to reason about. Also added an
+explicit `HeadMotion: Watch` to the chase block (it previously had none at
+all, unlike melee) so the companion visibly looks at the hostile it's
+closing distance on instead of having no head motion during that phase.
+
+Boot-tested via a real `./gradlew runServer` boot: `Validation complete.`,
+`Loaded 974 NPC configurations, Generic: 1`, `Hytale Server Booted!` - no
+errors tied to the new `And`/`Not`/`Target` structure or the added
+`HeadMotion`. Jar rebuilt and reinstalled. Not yet live-confirmed (needs a
+real fight to watch the companion's head during).
+
 ## Agreed next steps (in order)
 
 1. ~~Nothing ever consumes `sandbox/approved/`.~~ **Done for the ambient/
