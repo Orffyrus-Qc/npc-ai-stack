@@ -818,6 +818,79 @@ noted:**
   `ACTIVE_CONVERSATIONS` entries now get swept on a timer instead of only
   being checked lazily when that same player happened to chat again.
 
+## 2026-07-21, later still: "npc must be hostile to all enemy" - the AttitudeGroup fix only ever covered Trork
+
+User's ask after the previous `AttitudeGroup: "Kweebec"` fix: Adventurer should
+recognize and fight ALL hostile creature types, not just whichever one
+happened to get tested first. Investigated by fetching the real shipped
+`AttitudeGroup` assets for other hostile species, not just Trork:
+
+```
+Goblin.json:    {"Groups": {"Friendly": ["Goblin"], "Hostile": []}}
+Outlander.json: {"Groups": {"Revered": ["Outlander_Marauder"]}}   (no Hostile key at all)
+Scarak.json:    {"Groups": {"Hostile": ["Feran"]}}
+```
+
+Compare to Trork's own `{"Hostile": ["Kweebec"], ...}` (see the previous
+section). **Only Trork's group happens to name "Kweebec"** - Goblin's
+Hostile list is empty, Outlander has none, Scarak targets only "Feran".
+The earlier fix wasn't wrong, it was just narrower than it looked: it made
+Adventurer correctly recognized by Trork specifically, not by "hostile
+creatures" as a category - because `AttitudeGroup` encodes narrow,
+per-species ecological rivalries (Trork vs Kweebec, Scarak vs Feran), not
+a general "is this dangerous" flag.
+
+Confirmed the actual resolution order by disassembling
+`AttitudeView.getAttitude()` (registers three providers by priority):
+1. `WorldSupport.getOverriddenAttitude(candidate)` - a per-entity memory
+   override (e.g. after being attacked individually), null if none.
+2. `AttitudeMap.getAttitude(role, candidate, accessor)` - the
+   `AttitudeGroup`/"Groups" pairwise lookup above, null if neither side's
+   group mentions the other.
+3. **Fallback (priority `Integer.MAX_VALUE`, always non-null): the
+   OBSERVER's own `DefaultPlayerAttitude` (if candidate is a player) or
+   `DefaultNPCAttitude` (if candidate is an NPC) - not the candidate's.**
+
+So for Adventurer (self) looking at a Goblin (candidate, NPC): no
+override, no group match (Kweebec's own group doesn't mention Goblin
+either - checked), falls through to step 3 and resolves to **Adventurer's
+own `DefaultNPCAttitude: "Ignore"`** - silently excluded, since the
+existing `SensorEntityPrioritiserAttitude` only accepted
+`AttitudesByPriority: ["Hostile", "Neutral"]` (confirmed via disassembly
+of `BuilderSensorWithEntityFilters.getFilters()` that the Prioritiser
+auto-generates its own inclusion filter via
+`ISensorEntityPrioritiser.buildProvidedFilters()` - an attitude outside
+the list never reaches `getPriority()` at all, it's filtered upstream).
+
+There is no broader `AttitudeGroup` value that fixes this cleanly - the
+shipped rivalries are genuinely inconsistent across species (some empty,
+some narrow, none universal), and editing the *shipped* Goblin/Outlander/
+Scarak asset files isn't a real option. The one flag every dangerous
+vanilla mob sets *consistently* is its own `DefaultPlayerAttitude:
+"Hostile"` - that's literally what makes it attack players at all, and
+it's a property of the candidate itself, not a pairwise relationship.
+
+Fix: new `EntityFilterHostileSpecies.java` (+ builder), a custom
+"IsHostileSpecies" entity filter registered in `NpcAiPlugin.java` the same
+way as the existing custom sensors/actions
+(`registerCoreComponentType("IsHostileSpecies", ...)`, confirmed generic
+enough for filters too - `IEntityFilter` builders are just another
+`Builder<T>`). It resolves the candidate `Ref` to its `NPCEntity` ->
+`Role` -> `WorldSupport.getDefaultPlayerAttitude()` directly (both public,
+confirmed via disassembly), bypassing the pairwise resolver entirely.
+Wired into both `Mob` sensor blocks in `Adventurer.json` via `"Filters":
+[{"Type": "IsHostileSpecies"}]`, and `AttitudesByPriority` widened to
+`["Hostile", "Neutral", "Ignore", "Friendly", "Revered"]` (all five
+values) so the Prioritiser's own implicit inclusion filter can never
+reject a candidate this filter already matched - the Prioritiser now only
+ranks among survivors (pairwise-Hostile ranked above pairwise-Ignore, a
+reasonable tiebreak when multiple threats are in range at once), it no
+longer gates inclusion at all.
+
+`gradlew build` clean, jar rebuilt and installed to
+`UserData/Mods/NpcAiStack-0.1.0.jar`. Not yet live-confirmed against a
+non-Trork hostile (Goblin/Outlander/Scarak) - needs the next play session.
+
 ## Tuning table
 
 See README.md — it maps symptoms (slow dialogue, world stutter, OOM) to the

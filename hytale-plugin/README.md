@@ -142,6 +142,40 @@ real hostile yet. Adventurer-only for now (the archetype where physical
 combat fits the character) - Elder_Miri/Merchant_Oskar remain non-combat
 companions by design, matching their low-aggression personas.
 
+**2026-07-21, later still: "npc must be hostile to all enemy" - the
+`AttitudeGroup` fix above only ever covered Trork.** Fetched the real
+shipped `AttitudeGroup` assets for other hostile species to check: Goblin's
+own `Hostile` list is `[]` (empty), Outlander's group has no `Hostile` key
+at all, Scarak is hostile only toward `"Feran"`. Only Trork's own group
+happens to name `"Kweebec"` (Adventurer's `AttitudeGroup`) - the previous
+fix wasn't wrong, it was just narrower than it looked, because
+`AttitudeGroup` encodes narrow per-species ecological rivalries (Trork vs.
+Kweebec, Scarak vs. Feran), not a general "is this dangerous" property.
+Disassembled `AttitudeView.getAttitude()` to find the *real* resolution
+order: (1) a per-entity override, then (2) the `AttitudeGroup` pairwise
+lookup above, then (3) - **if neither matched - the fallback is the
+OBSERVER's own `DefaultNPCAttitude`, not anything about the candidate.**
+So Adventurer looking at a Goblin falls through all the way to its own
+`"Ignore"` default and gets silently excluded, same as before, just for a
+different underlying reason than the missing `AttitudeGroup` field. There
+is no single group value that fixes this generally - the shipped rivalries
+are genuinely inconsistent, and editing the shipped monster asset files
+isn't an option. Fixed properly this time: added a custom entity filter,
+`EntityFilterHostileSpecies.java` (registered as `"IsHostileSpecies"`),
+that reads the *candidate's own* `DefaultPlayerAttitude` directly instead
+of going through the pairwise resolver - the one flag every dangerous
+vanilla mob sets consistently, since it's literally what makes it attack
+players at all. Wired into both `Mob` sensor blocks in `Adventurer.json`
+via `"Filters": [{"Type": "IsHostileSpecies"}]`, with
+`AttitudesByPriority` widened to all five `Attitude` values so the
+Prioritiser's own implicit inclusion filter (confirmed via disassembly of
+`BuilderSensorWithEntityFilters.getFilters()` - the Prioritiser
+auto-generates a filter from its own priority list) never rejects a
+candidate this filter already matched; it now only ranks among survivors.
+`gradlew build` clean, jar rebuilt and installed. **Not yet live-confirmed
+against a non-Trork hostile** (Goblin/Outlander/Scarak) - needs the next
+play session.
+
 ## 2026-07-21: NPCs can actually lead you to a landmark, not just describe it
 
 Requested: once an NPC follows the player, the next step is for it to be

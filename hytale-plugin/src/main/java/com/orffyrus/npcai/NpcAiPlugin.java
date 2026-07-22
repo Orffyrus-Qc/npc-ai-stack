@@ -97,6 +97,9 @@ public class NpcAiPlugin extends JavaPlugin {
         NPCPlugin.get().registerCoreComponentType("SeekLandmark", SeekLandmarkSensorBuilder::new);
         LOGGER.atInfo().log("Registered SeekLandmark NPC sensor type");
 
+        NPCPlugin.get().registerCoreComponentType("IsHostileSpecies", EntityFilterHostileSpeciesBuilder::new);
+        LOGGER.atInfo().log("Registered IsHostileSpecies NPC entity filter type");
+
         PlayerChatToAIListener chatListener = new PlayerChatToAIListener(BRIDGE);
         this.getEventRegistry().registerAsyncGlobal(PlayerChatEvent.class, chatListener::onChat);
         LOGGER.atInfo().log("Registered PlayerChatEvent -> AI conversation listener");

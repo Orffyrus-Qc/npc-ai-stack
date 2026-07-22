@@ -105,7 +105,7 @@
               ]
             },
             {
-              "$Comment": "Adventurer-specific: notice nearby hostile creatures, mirroring the real Trork combat AI's own threat sensor (Type: Mob, Prioritiser: Attitude) - feeds npc-ai-stack's ThreatMemory so the AI can react to it in conversation. LockOnTarget makes the found hostile the locked \"Target\" the chase/attack nodes below react to. AttitudesByPriority is [Hostile, Neutral], not just [Hostile] - 2026-07-21 fix, real bug found live-testing companion combat (tamed, hostile mob present, still never attacked): WorldSupport.getAttitude() (confirmed via disassembly of SensorEntityPrioritiserAttitude.getPriority()) resolves a PAIRWISE relationship between this specific NPC and the candidate, not \"is this creature type hostile\" in the abstract - a mob configured hostile toward players is not automatically flagged Hostile toward another NPC like Adventurer, and any attitude not in this list is filtered out entirely (confirmed: an unlisted attitude throws IllegalStateException if ever reached, meaning it must be excluded upstream). The real, shipped analog for \"is this nearby thing dangerous\" - Server/NPC/Roles/_Core/Components/Steps/Component_Instruction_Damage_Check.json's own Sight/Sound-by-Attitude sensors, used by the neutral Kweebec to decide when to flee - checks [Hostile, Neutral] for exactly this reason, not Hostile alone.",
+              "$Comment": "Adventurer-specific: notice nearby hostile creatures, feeds npc-ai-stack's ThreatMemory so the AI can react to it in conversation. LockOnTarget makes the found hostile the locked \"Target\" the chase/attack nodes below react to. 2026-07-21: switched the real gating to a custom \"IsHostileSpecies\" Filter (EntityFilterHostileSpecies.java) instead of relying on the Attitude Prioritiser's pairwise AttitudesByPriority match, after \"npc must be hostile to all enemy\" turned up a second, deeper bug than the earlier [Hostile,Neutral] widening fixed: WorldSupport.getAttitude() (AttitudeView.getAttitude, confirmed via disassembly) resolves PAIRWISE - per-entity override, then an AttitudeGroup lookup (each species' own shipped \"Groups\" JSON lists which OTHER group names it holds Hostile toward), then finally falls back to the OBSERVER's (Adventurer's) own DefaultNPCAttitude (\"Ignore\"). Fetched the real shipped AttitudeGroup assets live: only Trork.json lists \"Kweebec\" (Adventurer's AttitudeGroup) as Hostile - Goblin.json's Hostile list is empty, Outlander.json has no Hostile key at all, Scarak.json is hostile only to \"Feran\". So the pairwise system only ever recognized Trork as an enemy; every other hostile species fell through to Adventurer's own \"Ignore\" default and was silently excluded (an unlisted attitude reaching SensorEntityPrioritiserAttitude.getPriority() throws IllegalStateException - confirmed it's excluded upstream via the Prioritiser's own buildProvidedFilters(), an implicit inclusion filter). IsHostileSpecies instead reads the CANDIDATE's own DefaultPlayerAttitude directly (the one flag every dangerous vanilla mob sets consistently, since it's literally what makes them attack players) - a species-agnostic signal, not a narrow rivalry lookup. AttitudesByPriority widened to include \"Ignore\" (plus Friendly/Revered for safety) so the Prioritiser's own implicit filter never rejects a candidate IsHostileSpecies already matched - it now only ranks among survivors (pairwise-Hostile ranked above pairwise-Ignore, a reasonable tiebreak when multiple threats are present). Not yet live-confirmed against a non-Trork hostile (Goblin/Outlander/Scarak) - see hytale-plugin/README.md.",
               "Continue": true,
               "Sensor": {
                 "Type": "Mob",
@@ -113,9 +113,12 @@
                 "GetPlayers": false,
                 "GetNPCs": true,
                 "LockOnTarget": true,
+                "Filters": [
+                  { "Type": "IsHostileSpecies" }
+                ],
                 "Prioritiser": {
                   "Type": "Attitude",
-                  "AttitudesByPriority": [ "Hostile", "Neutral" ]
+                  "AttitudesByPriority": [ "Hostile", "Neutral", "Ignore", "Friendly", "Revered" ]
                 }
               },
               "Actions": [
@@ -125,7 +128,7 @@
               ]
             },
             {
-              "$Comment": "Reactive companion defense: real, shipped 'EntityEvent' sensor (EventType: Damage, SearchType: PlayerOnly, NPCGroup: Player - confirmed valid asset at Server/NPC/Groups/Player.json) - confirmed via disassembly of SensorEntityEvent/BuilderSensorEntityEvent AND via its real usage in Server/NPC/Roles/_Core/Components/Steps/Component_Instruction_Allied_Damage_Check.json. Fires the instant a nearby player (the one this NPC is following) takes damage, regardless of whether THIS companion currently has line of sight on whatever's hitting them - the Mob+Attitude sensor above only reacts to a hostile the companion can already see/sense itself, which could miss an attacker sneaking up on the player specifically. Combined here with the same Mob+Attitude hostile search, just widened to 45 blocks (vs. the normal 30) - we now know for certain a threat is imminent nearby, so it's worth searching harder for it. Not yet live-confirmed (this whole companion-combat feature has never been tested near a real hostile creature - see hytale-plugin/README.md's \"Known simplification\").",
+              "$Comment": "Reactive companion defense: real, shipped 'EntityEvent' sensor (EventType: Damage, SearchType: PlayerOnly, NPCGroup: Player - confirmed valid asset at Server/NPC/Groups/Player.json) - confirmed via disassembly of SensorEntityEvent/BuilderSensorEntityEvent AND via its real usage in Server/NPC/Roles/_Core/Components/Steps/Component_Instruction_Allied_Damage_Check.json. Fires the instant a nearby player (the one this NPC is following) takes damage, regardless of whether THIS companion currently has line of sight on whatever's hitting them - the Mob+IsHostileSpecies sensor above only reacts to a hostile the companion can already see/sense itself, which could miss an attacker sneaking up on the player specifically. Combined here with the same Mob+IsHostileSpecies hostile search, just widened to 45 blocks (vs. the normal 30) - we now know for certain a threat is imminent nearby, so it's worth searching harder for it. Uses the same IsHostileSpecies Filter + widened AttitudesByPriority as the block above - see its $Comment for why. Not yet live-confirmed (this whole companion-combat feature has never been tested near a real hostile creature - see hytale-plugin/README.md's \"Known simplification\").",
               "Continue": true,
               "Sensor": {
                 "Type": "And",
@@ -144,9 +147,12 @@
                     "GetPlayers": false,
                     "GetNPCs": true,
                     "LockOnTarget": true,
+                    "Filters": [
+                      { "Type": "IsHostileSpecies" }
+                    ],
                     "Prioritiser": {
                       "Type": "Attitude",
-                      "AttitudesByPriority": [ "Hostile", "Neutral" ]
+                      "AttitudesByPriority": [ "Hostile", "Neutral", "Ignore", "Friendly", "Revered" ]
                     }
                   }
                 ]
