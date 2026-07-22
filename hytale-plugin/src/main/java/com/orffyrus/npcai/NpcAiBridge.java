@@ -210,7 +210,16 @@ public class NpcAiBridge implements WebSocket.Listener {
         // delivered twice and a stale/duplicate message can't resurrect an
         // already-answered handler.
         PendingReply pending = pendingReplies.remove(reqId);
-        if (pending != null && text != null && !text.isEmpty()) {
+        if (pending != null && text != null) {
+            // Always invoke the handler once text is present, even "" -
+            // 2026-07-21: the orchestrator now legitimately replies with
+            // empty text when the NPC has nothing to say this turn (GPU
+            // busy/timeout - see priority_queue.py, BUSY_LINES removed) and
+            // callers still need this to fire so they clear
+            // AwaitingReplyState (the "thinking" particle) and consider the
+            // request answered - it's the handler's own job to skip sending
+            // an empty chat message, not this dispatch layer's.
+            //
             // IMPORTANT: hop back onto the game/entity thread before touching
             // world state - this callback arrives on the websocket thread.
             pending.handler().onSay(npcId, text, action != null ? action : "none", isCompanion);

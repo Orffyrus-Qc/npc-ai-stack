@@ -48,14 +48,20 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
 
 ## Hard rules — do not break these
 
-1. **Dialogue always beats ambient.** Player-facing requests wait up to 3s
-   for a slot; ambient/idle requests NEVER queue — no slot free now means
-   instant canned fallback. Ambient is capped at 2 of 6 slots (was 2 of 4 -
-   see the 2026-07-21 load test below; the cap is a small absolute number
-   on purpose, not a proportional split, so dialogue's guaranteed minimum
-   only grows as slot count grows).
-2. **Nothing blocks the game loop.** Every LLM call has a timeout + fallback.
-   The plugin fires events async and applies replies when they arrive.
+1. **Dialogue always beats ambient.** Player-facing requests wait up to 12s
+   for a slot (raised from 3s on 2026-07-21, alongside removing BUSY_LINES -
+   see hard rule 2); ambient/idle requests NEVER queue — no slot free now
+   means an instant, silent no-op. Ambient is capped at 2 of 6 slots (was 2
+   of 4 - see the 2026-07-21 load test below; the cap is a small absolute
+   number on purpose, not a proportional split, so dialogue's guaranteed
+   minimum only grows as slot count grows).
+2. **Nothing blocks the game loop.** Every LLM call has a timeout. On
+   timeout/failure the NPC simply doesn't reply that turn (empty text,
+   handled the same as an ambient no-op) rather than blocking or speaking a
+   fallback line - **no pre-written filler text exists anywhere in this
+   stack** (`priority_queue.py`'s `BUSY_LINES` was removed 2026-07-21; every
+   word an NPC says comes from the model or it says nothing). The plugin
+   fires events async and applies replies when they arrive.
 3. **Only llm-inference touches the GPU.** Embeddings, DBs, sandbox: CPU.
 4. **Skill code changes go through the sandbox gate** (sandbox/
    run_skill_validation.sh → skill_harness.py → approved/). Facts and
@@ -67,8 +73,8 @@ sandbox/: skill validation in ephemeral --network none --read-only containers
 5. **NpcAiBridge.java stays free of Hytale API imports.** Hytale's NPC/ECS
    plugin APIs were still being renamed across 2026 patches — all game-API
    coupling belongs in the plugin handler code (NpcAiPlugin.java,
-   NpcInteractListener.java), not the transport. Still true as of the
-   2026-07-20 scaffold: NpcAiBridge.java has zero Hytale imports.
+   TalkToAIAction.java, PlayerChatToAIListener.java), not the transport.
+   Still true: NpcAiBridge.java has zero Hytale imports.
 6. Every skill is `decide(state: dict) -> dict` with an action from the
    whitelist in skill_harness.py. Extend the whitelist deliberately.
 
@@ -484,6 +490,62 @@ running orchestrator each measured 1.30s, confirmed padding a reply that
 would otherwise have arrived instantly. The icon itself is **not
 live-confirmed** - same limitation as everything else requiring a
 connected client this session: boot/validation-tested only.
+
+## 2026-07-21, later still: removed every pre-written fallback line
+
+Requested: let the AI talk, remove pre-made default responses. Two places
+had one: `priority_queue.py`'s `BUSY_LINES` (six rotating "give me a
+moment"-style lines, shown when the GPU had no free slot or the LLM call
+timed out/failed) and a second, separate copy `main.py` fell back to if
+`handle_dialogue()` itself threw an unexpected bug (added in the earlier
+audit pass, before this request, specifically so a server-side bug
+wouldn't be worse than a busy GPU - see that section above). Both removed;
+both now return `""` instead - the exact same "nothing to say this turn"
+sentinel `handle_ambient()` already used, so this isn't a new wire-protocol
+concept, just dialogue finally getting the same honest-silence treatment
+ambient always had.
+
+Removing the fallback text without changing anything else would have made
+"the GPU's momentarily busy" indistinguishable from real silence far more
+often than necessary, so `NPCRequestDispatcher`'s timeouts came along with
+it: `dialogue_wait_timeout_s` 3.0 -> 12.0, `dialogue_call_timeout_s` 6.0 ->
+10.0 (hard rule 1's documented number, updated). Both sit well above the
+real p95 latencies measured in the 2026-07-21 load test (~2.6-3.8s at
+12-16 concurrent requests on 6 slots), so in practice a real reply arriving
+late should now almost always still arrive - the empty-string path should
+only bind under genuinely pathological load or a hung call, not normal
+play with 1-3 players.
+
+The trickier half was making sure "" doesn't leave the new "thinking" icon
+(added just above) stuck: `NpcAiBridge.handleMessage()` used to skip
+calling the reply handler entirely when `text` was empty, which would have
+meant `AwaitingReplyState.clear()` never fires and the particle just sits
+there for the full 20s TTL every time the AI has nothing to say. Fixed by
+always invoking the handler once `text` is non-null (even ""), and moving
+the "don't send an empty chat message" decision into
+`TalkToAIAction`/`PlayerChatToAIListener`'s own handlers instead - they
+still clear the awaiting-state and skip the rest of the action-handling
+logic (nothing real to act on when there's no real reply), just without
+sending a message. `handle_dialogue()` in `main.py` also stops recording an
+episodic memory for an empty reply (`"I replied: ''"` isn't a real memory,
+and would otherwise let a transient failure permanently pollute the NPC's
+memory of the player).
+
+Not touched, on purpose: the short system-enforced clarifier appended when
+the model incorrectly decides ACCEPT_TAME against the hard 1-per-player
+rule ("(Something holds you back from actually committing to this.)" in
+`handle_dialogue()`). That's appended to real, model-generated text for a
+specific correctness constraint, not a substitute for a reply the model
+never gave - a different category from BUSY_LINES, left as-is. Revisit if
+that reads as still in-scope for "let the AI talk."
+
+Verified: dispatcher-level test confirms `request_dialogue()` now returns
+`""` on a simulated call failure (was previously a random `BUSY_LINES`
+pick); a real dialogue turn through the actual running orchestrator still
+gets a real reply unaffected by any of this. `gradlew build`/`runServer`
+clean after the Java-side changes (no role JSON touched this round, pure
+logic changes in `NpcAiBridge.java`/`TalkToAIAction.java`/
+`PlayerChatToAIListener.java`).
 
 ## 2026-07-21 audit pass, approved/ wired up, then a real GPU load test
 

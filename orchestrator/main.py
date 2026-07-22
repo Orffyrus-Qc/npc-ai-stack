@@ -53,7 +53,6 @@ import asyncio
 import json
 import logging
 import os
-import random
 import time
 from pathlib import Path
 
@@ -62,7 +61,7 @@ import websockets
 from llm_client import DialogueResult, LlamaClient, NPCContext, Personality
 from memory import EpisodicEntry, MemoryStore, compress_npc_memory
 from personality import PersonalityStore
-from priority_queue import BUSY_LINES, NPCRequestDispatcher
+from priority_queue import NPCRequestDispatcher
 from skill_runtime import SkillRuntime
 from taming import TamingStore
 
@@ -224,13 +223,19 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool]:
     logger.info("npc %s (player %s): action=%s tone=%s is_companion=%s",
                 ctx.npc_id, msg.get("player_id", ""), action, tone, ctx.is_companion)
 
-    # Remember the exchange (fire-and-forget so we don't add latency)
-    _spawn(MEMORY.remember_episode(EpisodicEntry(
-        npc_id=ctx.npc_id,
-        player_id=msg.get("player_id", ""),
-        text=f'Player said: "{msg["text"][:200]}". I replied: "{text[:200]}"',
-        ts=time.time(),
-    )))
+    # Remember the exchange (fire-and-forget so we don't add latency) - only
+    # when there's an actual reply to remember. text=="" means the dispatcher
+    # fell back to silence (GPU busy/timeout/error - see priority_queue.py),
+    # not a real exchange; "I replied: ''" isn't a memory worth keeping, and
+    # storing it would let a transient failure permanently pollute this NPC's
+    # memory of the player.
+    if text:
+        _spawn(MEMORY.remember_episode(EpisodicEntry(
+            npc_id=ctx.npc_id,
+            player_id=msg.get("player_id", ""),
+            text=f'Player said: "{msg["text"][:200]}". I replied: "{text[:200]}"',
+            ts=time.time(),
+        )))
 
     # Real outcome detection, inferred from the exchange itself rather than
     # a new Java-side game hook (see CLAUDE.md/task tracking for why:
@@ -358,12 +363,15 @@ async def plugin_connection(ws) -> None:
                     # timeout+fallback - a bug anywhere in that surrounding
                     # logic used to propagate all the way out here and skip
                     # the "say" send entirely, leaving the player with total
-                    # silence instead of even a busy-fallback line. Never
-                    # let an unexpected server-side bug be worse for the
-                    # player than the GPU just being busy.
+                    # protocol-level silence (no message sent at all) instead
+                    # of a normal empty-text reply. Still send "say" with
+                    # empty text on an unexpected bug, same as any other
+                    # dialogue fallback (see priority_queue.py's 2026-07-21
+                    # removal of BUSY_LINES) - never a canned line pretending
+                    # to be something the NPC actually decided to say.
                     logger.exception("handle_dialogue failed unexpectedly npc=%s",
                                       msg.get("npc_id"))
-                    text, action = random.choice(BUSY_LINES), "none"
+                    text, action = "", "none"
             elif mtype == "ambient":
                 text, action = await handle_ambient(msg), "none"
             elif mtype == "outcome":

@@ -110,6 +110,13 @@ public class PlayerChatToAIListener {
                     // re-resolve a fresh PlayerRef from the UUID instead of
                     // reusing `sender`.
                     AwaitingReplyState.clear(id);
+                    if (text.isEmpty()) {
+                        // See TalkToAIAction's matching comment - the
+                        // orchestrator legitimately has nothing to say this
+                        // turn, stay silent rather than invent a line.
+                        LOGGER.atFine().log(npcName + " had nothing to say this turn");
+                        return;
+                    }
                     LOGGER.atInfo().log("[" + npcName + "] " + text);
                     PlayerRef freshSender = Universe.get().getPlayer(playerUuid);
                     if (freshSender == null) {

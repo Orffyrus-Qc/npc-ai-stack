@@ -168,8 +168,11 @@ memory, sandboxed skill self-improvement, all on one box with one small GPU.
 - **Idle NPCs mutter to themselves.** Ambient one-liners fire when nothing
   else is going on, but they're capped and always lose their GPU slot to
   an actual player talking to an NPC — dialogue never waits behind flavor
-  text, and nothing the LLM does can stall the game loop (hard timeout +
-  canned fallback on every call).
+  text, and nothing the LLM does can stall the game loop (hard timeout on
+  every call). No pre-written filler text exists anywhere in this stack -
+  as of 2026-07-21, a call that times out or fails just means the NPC says
+  nothing that turn, not a canned line pretending to be something it
+  decided to say.
 - **NPC behavior can improve itself, carefully.** New `decide(state)`
   skills get proposed, run through validation in a locked-down, networkless
   container, and only reach live NPCs if they pass — bad candidates get

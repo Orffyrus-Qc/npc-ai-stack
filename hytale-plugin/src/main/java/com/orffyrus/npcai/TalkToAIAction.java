@@ -110,6 +110,15 @@ public class TalkToAIAction extends ActionBase {
                     // than reusing it - the player may also have
                     // disconnected, hence the null check.
                     AwaitingReplyState.clear(id);
+                    if (text.isEmpty()) {
+                        // The orchestrator legitimately has nothing to say
+                        // this turn (GPU busy/timeout - see
+                        // priority_queue.py, BUSY_LINES removed 2026-07-21)
+                        // - stay silent rather than invent a line, same as
+                        // ambient already does for an empty reply.
+                        LOGGER.atFine().log(npcName + " had nothing to say this turn");
+                        return;
+                    }
                     LOGGER.atInfo().log("[" + npcName + "] " + text);
                     PlayerRef freshPlayerRef = Universe.get().getPlayer(playerUuid);
                     if (freshPlayerRef == null) {

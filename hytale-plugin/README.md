@@ -50,7 +50,10 @@ same line verbatim across separate turns (added `repeat_penalty`/
 `presence_penalty` to the llama.cpp call, plus an explicit "don't repeat
 yourself" prompt rule), and the dispatcher's flat `"..."` GPU-busy
 fallback replaced with a rotating pool of in-character "give me a
-moment" lines.
+moment" lines. **Superseded 2026-07-21**: those lines (and the whole
+canned-fallback concept) were removed - see CLAUDE.md's "removed every
+pre-written fallback line" - an NPC with nothing to say now just says
+nothing, rather than a pre-written filler pretending to be its own words.
 
 **Known simplification, stated plainly:** companion combat (below) is
 tied purely to "is this NPC a companion + is a hostile nearby," not to a
