@@ -83,6 +83,24 @@ side effect worth watching for: this may now also make a companion react
 to genuinely harmless Neutral creatures (passive wildlife), the same
 trade-off the real game's own Kweebec fear-check already accepts.
 
+**2026-07-21, correction: the attitude fix above was never actually
+exercised.** Reported still not attacking. This machine turned out to be
+the one the real session runs on - found real, timestamped server/client
+logs (`%APPDATA%/Hytale/UserData/Saves/*/logs/`, `Logs/`) and cross-
+referenced them against `docker compose logs orchestrator` for the same
+window. The real trace: player clicked the already-tamed Adventurer, sent
+one chat message that got classified `action=offer_guide` (reply text:
+*"I'll follow close behind, Orffyrus. Lead the way."* - the NPC saying it
+would follow the player, tagged with the action that makes it walk away
+from the player instead), `GuideState` sent it to a landmark, it arrived 2
+seconds later, and the session ended ~2.5 minutes after with nothing else
+logged. The companion had physically left before any hostile encounter
+could happen near it - never an attitude-filter problem. See CLAUDE.md's
+"combat STILL didn't fire" section for the actual root cause (an ambiguous
+prompt rule confusing "guide me somewhere" with "follow/accompany me") and
+the fix, verified against the real model. The attitude fix above may well
+be entirely correct - it just never got the chance to run in this session.
+
 **2026-07-21: reactive defense added** (requested: "npc must fight with me
 if I am attacked"). The Mob+Attitude sensor above only reacts to a hostile
 this companion can already see/sense itself - if something attacks the

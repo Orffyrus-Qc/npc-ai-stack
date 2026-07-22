@@ -639,6 +639,57 @@ companion react to harmless Neutral creatures (passive wildlife), not just
 genuinely dangerous ones - the same imprecision the real Kweebec fear-check
 already accepts, not something worse than the shipped game does.
 
+## 2026-07-21, later still: combat STILL didn't fire - real cause was never the attitude filter
+
+Reported again: still not attacking. This environment has no live client, but
+this machine turned out to BE the one the real play session runs on - found
+real, timestamped server/client logs under `%APPDATA%/Hytale/UserData/`
+(`Saves/NPC_TEST-07/logs/*_server.log`, `Logs/*_client.log`) from the actual
+session, confirmed to be running the just-fixed jar (`[NpcAiPlugin] Registered
+NoteAttackedByPlayer/IsAwaitingReply...` only exist in today's build). Cross-
+referenced against `docker compose logs orchestrator` for the same window
+using the real npc_id/player_id. This is a categorically different, far
+stronger kind of evidence than boot-testing or reasoning from disassembly -
+an actual recorded trace of what happened, not an inference about what should
+happen.
+
+The trace: player spawned Adventurer (01:24:15), clicked it (01:24:21, real
+reply, `is_companion=True` - already tamed from an earlier session, Postgres
+truth survived the restart as designed), then sent one chat message
+(01:24:37) that the orchestrator classified as `action=offer_guide`. Reply
+text: *"I'll follow close behind, Orffyrus. Lead the way."* - the NPC saying
+**it** will follow the **player** - yet tagged `OFFER_GUIDE`, which the
+system interprets as the opposite (the NPC walks to a landmark, the player is
+expected to follow it). `GuideState` immediately started guiding; the
+companion arrived at a landmark 2 seconds later and the session ended ~2.5
+minutes after with no further NPC-AI activity logged at all. The companion
+had physically left the player's side before any hostile encounter could
+have happened near it - never an attitude-filter problem, that fix from
+earlier may well be completely correct and simply never got exercised.
+
+Root cause: `SYSTEM_TEMPLATE`'s `OFFER_GUIDE` rule said only "the player just
+asked you to lead them somewhere" - genuinely ambiguous between "lead me
+somewhere specific" (should trigger it) and "follow/accompany me" (should
+NOT - a tamed companion already follows automatically with no tag needed,
+per the passive Instructions-tree logic, not a per-message LLM decision).
+The model conflated them. Fixed by making the distinction explicit and
+mechanical in the prompt, not just narrative: OFFER_GUIDE/DECLINE_GUIDE only
+when a real destination is named or clearly implied; "follow me"/"come with
+me"/"stay close"/"let's go" with no destination is NONE, explicitly told
+this matters because tagging OFFER_GUIDE here sends the companion walking
+AWAY from the player, the opposite of what was asked.
+
+Verified against the real model (not just reasoning about the prompt text):
+"follow me" -> `none` (was the exact failure), "stay close to me" -> `none`,
+"take me to the lake" -> `offer_guide`, "guide me to the nearest landmark" ->
+`offer_guide`, "where's the blacksmith, show me" -> `offer_guide`. One
+unrelated quirk noted, not fixed: "come with me" produced `offer_fight` with
+some hallucinated flavor text about nearby bandits - doesn't reproduce this
+bug (`OFFER_FIGHT` never moves the NPC, per `main.py`'s own wire-protocol
+docstring: "informational only"), just the model being imaginative at
+temperature 0.8 on short ambiguous input - worth another look someday, not
+urgent.
+
 ## 2026-07-21 audit pass, approved/ wired up, then a real GPU load test
 
 Asked to deep-audit the whole project (not chasing one symptom), fix what's
