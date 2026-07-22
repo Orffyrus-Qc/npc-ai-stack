@@ -4,6 +4,8 @@ import com.hypixel.hytale.component.Ref;
 import com.hypixel.hytale.component.Store;
 import com.hypixel.hytale.logger.HytaleLogger;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
+import com.hypixel.hytale.server.core.universe.PlayerRef;
+import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import com.hypixel.hytale.server.npc.asset.builder.BuilderSupport;
 import com.hypixel.hytale.server.npc.corecomponents.SensorBase;
@@ -43,11 +45,24 @@ import java.util.UUID;
  * GuideState.shouldLogStuck()) and drops a real, native map marker at the
  * destination (NearbyLandmarks.createGuideMarker()/removeGuideMarker()) so
  * the player can see exactly where they're headed on their own map.
+ *
+ * 2026-07-22, later still: once arrived, actually waits for the
+ * requesting player to catch up (isPlayerNear() below,
+ * GuideState.markPlayerNear()/isLingering()) instead of a flat 5s clock
+ * from the moment of arrival - a real live bug ("he must run to the ruins
+ * and wait for me if I am too far") showed the old flat clock gave up and
+ * resumed following long before the player could realistically have
+ * walked there.
  */
 public class SeekLandmarkSensor extends SensorBase {
 
     private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
     private static final double ARRIVED_DISTANCE = 6.0;
+    /** Same threshold the en-route "wait for player" JSON node already
+     * uses (Player Range:15 Filters:[IsOwner]) - reused here for
+     * consistency so "close enough to have caught up" means the same
+     * thing whether the NPC is still walking or already arrived. */
+    private static final double WAIT_FOR_PLAYER_DISTANCE = 15.0;
 
     private final PositionProvider positionProvider = new PositionProvider();
 
@@ -75,22 +90,50 @@ public class SeekLandmarkSensor extends SensorBase {
         if (GuideState.hasArrived(npcId)) {
             // Already reached the landmark on an earlier tick - don't
             // re-search for the target or recompute distance at all, just
-            // stand here (own current position, so "Seek" is a no-op) until
-            // the linger window (GuideState.ARRIVAL_LINGER_MILLIS) elapses.
+            // stand here (own current position, so "Seek" is a no-op).
             // 2026-07-22 real bug found live ("npc begin to lead but return
             // to his following duty"): this used to stopGuiding()
             // immediately on arrival, in the SAME tick companion-follow
             // would then take over (no Continue on either tier's
-            // Instructions nodes) - a short/nearby guide (confirmed via the
-            // real server log: both real guide requests that session
-            // arrived in 4-5 real seconds) read as "began to lead but
-            // immediately went back to following me," since the player
-            // never got even a moment of "we're here" first.
+            // Instructions nodes) - read as "began to lead but immediately
+            // went back to following me," since the player never got even a
+            // moment of "we're here" first.
+            //
+            // 2026-07-22, later still, a SECOND real bug found live ("he go
+            // away then return to me and follow me... he must run to the
+            // ruins and wait for me if I am too far"): the fix above only
+            // used a flat 5s clock from the moment of ARRIVAL, not from
+            // when the player actually caught up - an entirely ordinary
+            // guide distance (35 blocks, confirmed via this session's own
+            // log) easily takes the player longer than 5 seconds to walk,
+            // so the NPC gave up "showing them the place" and walked
+            // straight back to follow them before they'd even arrived.
+            // Fixed: the linger clock (GuideState.isLingering()) now only
+            // starts once the requesting player is actually confirmed
+            // nearby (isPlayerNear() below, GuideState.markPlayerNear()) -
+            // until then, keep waiting here regardless of elapsed time,
+            // bounded only by GuideState.hasWaitedTooLongForPlayer() (2
+            // minutes) so a player who never shows up at all doesn't leave
+            // the NPC stuck here forever.
+            UUID playerId = GuideState.getPlayerId(npcId);
+            if (playerId != null && !GuideState.hasPlayerBeenNear(npcId) && isPlayerNear(ref, store, playerId)) {
+                GuideState.markPlayerNear(npcId);
+            }
             if (GuideState.isLingering(npcId)) {
                 positionProvider.setTarget(pos.x, pos.y, pos.z);
                 return true;
             }
-            LOGGER.atInfo().log(npcId + " done showing the player the landmark, resuming normal behavior");
+            if (!GuideState.hasPlayerBeenNear(npcId)) {
+                if (!GuideState.hasWaitedTooLongForPlayer(npcId)) {
+                    // Still patiently waiting for the player to catch up -
+                    // stand here regardless of how long it's taken so far.
+                    positionProvider.setTarget(pos.x, pos.y, pos.z);
+                    return true;
+                }
+                LOGGER.atInfo().log(npcId + " waited too long for the player to catch up, resuming normal behavior");
+            } else {
+                LOGGER.atInfo().log(npcId + " done showing the player the landmark, resuming normal behavior");
+            }
             NearbyLandmarks.removeGuideMarker(ref, store, GuideState.getCreatedMarkerId(npcId));
             GuideState.stopGuiding(npcId);
             return false;
@@ -193,5 +236,37 @@ public class SeekLandmarkSensor extends SensorBase {
     @Override
     public InfoProvider getSensorInfo() {
         return positionProvider;
+    }
+
+    /**
+     * Whether the real, requesting player (by UUID, NOT necessarily this
+     * NPC's tamed owner - see GuideState's playerId javadoc) is currently
+     * within WAIT_FOR_PLAYER_DISTANCE of this NPC. Resolves the player's
+     * live position via Universe.get().getPlayer(UUID).getReference() (a
+     * Ref into the SAME EntityStore/world the NPC itself lives in,
+     * confirmed via disassembly of PlayerRef) rather than anything cached -
+     * a player can move every tick, so this always reads their true
+     * current position. Returns false (not near) if the player has
+     * disconnected or their TransformComponent can't be resolved for any
+     * reason - never throws, same defensive standard as the rest of this
+     * class's real-world lookups.
+     */
+    private boolean isPlayerNear(Ref<EntityStore> npcRef, Store<EntityStore> store, UUID playerId) {
+        try {
+            PlayerRef playerRef = Universe.get().getPlayer(playerId);
+            if (playerRef == null) return false;
+            Ref<EntityStore> playerEntityRef = playerRef.getReference();
+            if (playerEntityRef == null) return false;
+            TransformComponent npcTc = store.getComponent(npcRef, TransformComponent.getComponentType());
+            TransformComponent playerTc = store.getComponent(playerEntityRef, TransformComponent.getComponentType());
+            if (npcTc == null || playerTc == null) return false;
+            Vector3d npcPos = npcTc.getPosition();
+            Vector3d playerPos = playerTc.getPosition();
+            double dx = npcPos.x - playerPos.x, dz = npcPos.z - playerPos.z;
+            return (dx * dx + dz * dz) < (WAIT_FOR_PLAYER_DISTANCE * WAIT_FOR_PLAYER_DISTANCE);
+        } catch (Exception e) {
+            LOGGER.atWarning().log("SeekLandmarkSensor couldn't resolve player position for " + playerId + ": " + e);
+            return false;
+        }
     }
 }

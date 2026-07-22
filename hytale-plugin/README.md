@@ -1,5 +1,34 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: guide now waits for the player to actually catch up, not a flat 5s clock
+
+User report: "he go away then return to me and follow me" instead of
+running to the destination and waiting - "he must run to the ruins and
+wait for me if I am too far." The arrival "linger" (added earlier today
+to fix an instant snap-back bug) started its 5-second clock from the
+moment of arrival, not from when the player actually caught up - an
+ordinary 35-block guide distance easily takes longer than 5 seconds to
+walk, so the NPC gave up showing the destination and walked back to
+follow before the player had even arrived.
+
+Fixed: `GuideState` now tracks when the requesting player is actually
+confirmed nearby (15 blocks, resolved via a live `Universe.get().
+getPlayer(UUID)` lookup, not cached) separately from the arrival
+timestamp - the showcase linger only starts once they're truly there,
+bounded by a 2-minute safety valve in case they never show up at all.
+
+Boot-tested clean, jar rebuilt/reinstalled - the user's session had ended
+by the time this was investigated (confirmed via process check), so a
+real boot test was possible this time.
+
+Also asked (not yet built): how the NPC could answer real environment
+questions like "what color is the flower between us" instead of
+inventing an answer (confirmed happening live - "bright crimson red,"
+pure confabulation). Recommended approach: a block-scanning sibling to
+`NearbyLandmarks` feeding the same grounded-situation-text pipeline the
+navigation rewrite uses - needs real investigation into Hytale's block
+API first, nothing implemented yet.
+
 ## 2026-07-22, later still: new diagnostic logging found two real bugs on its first real use
 
 After a full memory reset (all `Adventurer` rows + episodic memory wiped,

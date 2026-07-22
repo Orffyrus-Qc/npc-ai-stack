@@ -2009,6 +2009,65 @@ is exactly the kind of thing the new diagnostic logging was added for -
 neither bug would have been remotely diagnosable from the old "gave up
 guiding...no progress for too long" line alone.
 
+## 2026-07-22, later still: "he must run to the ruins and wait for me if I am too far" - the arrival wait was a flat clock, not a real one
+
+User: "I asked him to 'lead me to ruins' so he go away then return to me
+and follow me. But he must run to the ruins and wait for me if I am too
+far." The exact "ruins" request wasn't in the current session's log (it
+had ended right as this was reported), but the SAME session showed the
+identical mechanism on two other guide requests: resolve target, arrive,
+linger for a flat 5 seconds, then unconditionally resume companion-follow -
+regardless of whether the player has actually caught up. One of those
+requests resolved a target 35 blocks away; walking 35 blocks realistically
+takes a player longer than 5 seconds, so the NPC gave up "showing them the
+place" and walked straight back to follow them before they'd arrived -
+exactly "goes away, then returns and follows" instead of "runs there and
+waits."
+
+Root cause: `ARRIVAL_LINGER_MILLIS` (added earlier today to fix the
+instant-snap-back bug) started its clock from the moment of ARRIVAL, not
+from when the player actually caught up - it solved "linger at all" but
+not "linger until the player who's supposed to be following is actually
+there."
+
+Fix: `GuideState` now tracks `playerNearSinceMillis` separately from
+`arrivedAtMillis` - the 5s showcase linger only starts once the requesting
+player (by UUID - not necessarily this NPC's tamed owner, same distinction
+as everywhere else in the guide system) is confirmed within 15 blocks
+(`SeekLandmarkSensor.isPlayerNear()`, resolving their live position via
+`Universe.get().getPlayer(UUID).getReference()` - confirmed via
+disassembly of `PlayerRef` - into the same `Store` the NPC's own position
+comes from). Until then, the NPC just keeps standing at the destination,
+bounded by a generous 2-minute `MAX_ARRIVED_WAIT_MILLIS` safety valve
+(`hasWaitedTooLongForPlayer()`) so a player who never shows up at all
+(logged out, wandered off) doesn't strand the NPC there forever.
+
+Boot-tested clean (`./gradlew build`/`runServer`, no errors) - the user's
+real session had ended by the time this was investigated, confirmed via
+`Get-CimInstance Win32_Process` before running anything, so a boot test
+was safe this time. Jar rebuilt and reinstalled. Needs the user's next
+play session to confirm the NPC now genuinely waits at the destination
+rather than giving up early.
+
+## 2026-07-22, later still: "what is the color of the flower on the ground between us" - environment sensing, not yet built
+
+User asked how the NPC could answer real environmental questions like
+this, after noticing it just invents an answer today (confirmed in the
+same session's log: "This flower looks a bright crimson red..." - pure
+confabulation, no real grounding, since there's no mechanism today that
+looks at actual nearby blocks). Recommended, not yet implemented: the
+same disassembly-first approach as `NearbyLandmarks` but for real nearby
+BLOCKS instead of zones/prefabs/markers - scan a small radius around the
+NPC for notable block types (flowers, resources) and feed a short "what's
+around you" fact into the same situation-text/prompt-grounding pipeline
+navigation just went through, so the model states what it actually
+perceives instead of inventing color/detail from nothing. Needs real
+investigation into Hytale's block-query API and whether "color" is even
+a queryable property (vs. baked into the block's name, e.g. separate
+"Red_Flower"/"Blue_Flower" block ids) before it can be scoped properly -
+nothing implemented yet, this is a recommendation pending that
+investigation and user confirmation.
+
 ## Tuning table
 
 See README.md — it maps symptoms (slow dialogue, world stutter, OOM) to the

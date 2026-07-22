@@ -87,16 +87,41 @@ public final class GuideState {
      * bouncing off terrain) still gives up. */
     private static final long MAX_STUCK_MILLIS = 60_000;
 
-    /** Once arrived, stand at the landmark this long before resuming normal
-     * behavior (companion-follow) - see markArrived()/isLingering(). Without
-     * this, arrival and resuming "seek toward owner" happened in the exact
-     * same tick (no Continue on either the guide-tier or follow-tier
-     * Instructions nodes), so a short guide read as "began to lead but
-     * immediately went back to following me" - live-reported 2026-07-22,
-     * confirmed via the real server log: both real guide requests that
-     * session arrived within 4-5 real seconds, meaning the player never got
-     * even one tick of "we're here" before follow resumed. */
+    /** Once arrived AND the requesting player has caught up (see
+     * markPlayerNear()/hasPlayerBeenNear()), stand at the landmark this
+     * long before resuming normal behavior (companion-follow) - see
+     * isLingering(). Without the "arrived" half of this fix, arrival and
+     * resuming "seek toward owner" happened in the exact same tick (no
+     * Continue on either the guide-tier or follow-tier Instructions
+     * nodes), so a short guide read as "began to lead but immediately went
+     * back to following me" - live-reported 2026-07-22, confirmed via the
+     * real server log: both real guide requests that session arrived
+     * within 4-5 real seconds, meaning the player never got even one tick
+     * of "we're here" before follow resumed.
+     *
+     * 2026-07-22, later still, real bug found live ("he go away then
+     * return to me and follow me... he must run to the ruins and wait for
+     * me if I am too far"): this used to be a flat clock from the moment
+     * of ARRIVAL, not from when the player actually caught up - a
+     * destination even 35 real blocks away (an entirely ordinary distance
+     * for a guide request) easily takes the player longer than 5 seconds
+     * to reach on foot, so the NPC gave up "showing them the place" and
+     * walked straight back to follow them before they'd even arrived,
+     * defeating the entire point of "run ahead and wait for me." Fixed by
+     * gating the linger clock on the player's real position (see
+     * SeekLandmarkSensor's isPlayerNear()) instead of the arrival
+     * timestamp - see MAX_ARRIVED_WAIT_MILLIS below for the bound on how
+     * long it waits if the player never shows up at all. */
     private static final long ARRIVAL_LINGER_MILLIS = 5_000;
+
+    /** Give up waiting at the destination (and resume normal behavior)
+     * if the requesting player never gets within WAIT_FOR_PLAYER_DISTANCE
+     * (SeekLandmarkSensor) at all within this long after arrival - a
+     * generous bound (2 minutes) so a player who's genuinely still on
+     * their way isn't cut off, but one who wandered off entirely, logged
+     * out, or is on the far side of the map doesn't leave the NPC
+     * standing at the destination forever. */
+    private static final long MAX_ARRIVED_WAIT_MILLIS = 120_000;
 
     /** Minimum real time between "still guiding, N blocks away" diagnostic
      * log lines while en route - see shouldLogStuck()'s javadoc. Added
@@ -125,6 +150,10 @@ public final class GuideState {
         volatile long lastProgressMillis;
         volatile double lastDistanceSq = Double.MAX_VALUE;
         volatile long arrivedAtMillis = 0;
+        /** 0 until the requesting player is confirmed within
+         * WAIT_FOR_PLAYER_DISTANCE of the arrived-at destination - see
+         * markPlayerNear()/hasPlayerBeenNear()/isLingering(). */
+        volatile long playerNearSinceMillis = 0;
         volatile long lastStuckLogMillis;
         /** Id of the real map marker SeekLandmarkSensor dropped at this
          * guide's target (see NearbyLandmarks.createGuideMarker()) - null
@@ -270,13 +299,45 @@ public final class GuideState {
         return g != null && g.arrivedAtMillis != 0;
     }
 
-    /** True for ARRIVAL_LINGER_MILLIS after markArrived() - see that
-     * constant's javadoc for why this exists. Only meaningful once
+    /** Marks the moment the requesting player was first confirmed within
+     * WAIT_FOR_PLAYER_DISTANCE of the arrived-at destination (see
+     * SeekLandmarkSensor.isPlayerNear()) - idempotent, only the first call
+     * sets the timestamp. Only meaningful once hasArrived() is true. */
+    public static void markPlayerNear(String npcId) {
+        Guiding g = GUIDING.get(npcId);
+        if (g != null && g.playerNearSinceMillis == 0) {
+            g.playerNearSinceMillis = System.currentTimeMillis();
+        }
+    }
+
+    /** True once the player has been confirmed near at least once since
+     * arrival (regardless of whether ARRIVAL_LINGER_MILLIS has since
+     * elapsed) - lets SeekLandmarkSensor tell "still waiting for the
+     * player to catch up" apart from "player caught up, now just
+     * finishing the showcase linger." */
+    public static boolean hasPlayerBeenNear(String npcId) {
+        Guiding g = GUIDING.get(npcId);
+        return g != null && g.playerNearSinceMillis != 0;
+    }
+
+    /** True for ARRIVAL_LINGER_MILLIS after the player was first confirmed
+     * near (NOT after raw arrival - see ARRIVAL_LINGER_MILLIS's javadoc for
+     * why that distinction is the whole fix). Only meaningful once
      * hasArrived() is true. */
     public static boolean isLingering(String npcId) {
         Guiding g = GUIDING.get(npcId);
-        return g != null && g.arrivedAtMillis != 0
-                && (System.currentTimeMillis() - g.arrivedAtMillis) < ARRIVAL_LINGER_MILLIS;
+        return g != null && g.playerNearSinceMillis != 0
+                && (System.currentTimeMillis() - g.playerNearSinceMillis) < ARRIVAL_LINGER_MILLIS;
+    }
+
+    /** True once this NPC has been waiting at the destination for
+     * MAX_ARRIVED_WAIT_MILLIS without the player ever catching up at all -
+     * SeekLandmarkSensor should give up waiting and resume normal behavior
+     * regardless of why the player never arrived. */
+    public static boolean hasWaitedTooLongForPlayer(String npcId) {
+        Guiding g = GUIDING.get(npcId);
+        return g != null && g.arrivedAtMillis != 0 && g.playerNearSinceMillis == 0
+                && (System.currentTimeMillis() - g.arrivedAtMillis) > MAX_ARRIVED_WAIT_MILLIS;
     }
 
     /** Id of the real map marker created for this guide's target, or null
