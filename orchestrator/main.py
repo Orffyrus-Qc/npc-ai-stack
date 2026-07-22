@@ -61,6 +61,7 @@ from pathlib import Path
 
 import websockets
 
+import last_reply
 from llm_client import DialogueResult, LlamaClient, NPCContext, Personality
 from memory import EpisodicEntry, MemoryStore, compress_npc_memory
 from personality import PersonalityStore
@@ -201,6 +202,7 @@ async def _build_context(msg: dict) -> NPCContext:
         is_companion=is_companion,
         player_name=msg.get("player_name", ""),
         open_thread_hint=open_thread_hint or "",
+        last_reply=last_reply.get(npc_id, player_id) if player_id else "",
     )
 
 
@@ -254,6 +256,10 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool, str]:
             text=f'Player said: "{msg["text"][:200]}". I replied: "{text[:200]}"',
             ts=time.time(),
         )))
+        # Synchronous (not _spawn'd) - see last_reply.py's docstring for
+        # why this needs to be immediate, unlike the episodic write above:
+        # a fast next turn must never be able to race ahead of this.
+        last_reply.record(ctx.npc_id, msg.get("player_id", ""), text)
 
     # Real outcome detection, inferred from the exchange itself rather than
     # a new Java-side game hook (see CLAUDE.md/task tracking for why:

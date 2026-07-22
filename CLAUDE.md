@@ -2238,6 +2238,64 @@ failing, using the real player UUID - real reply came back correctly,
 confirmed via `docker compose logs llm-inference` that no
 context-overflow error occurred on the successful call.
 
+## 2026-07-22, later still: "he continue to talk about the past things when I ask a new question" - two real, distinct causes, one fully fixed, one honestly partial
+
+User: "npn can identify things when I ask him but he continue to talk
+about the past things when I ask a new question." Checked the real
+server log before guessing - the actual symptom was more specific than
+the phrasing suggested: the model was repeating the exact same reply
+VERBATIM many times in a row ("Ah, Orffyrus! It looks like some kind of
+unusual soil or mineral..." repeated 8+ times over 5 minutes), not
+confusing old topics with new ones.
+
+**Cause 1, fully fixed: many of the repeats were about real blocks
+(soil/ore/rock) that `NearbyObjects.isNotableBlockId()` didn't recognize
+as notable** (only flower/plant/mushroom before today) - so the model had
+nothing real to ground an answer in and fell back to the same vague
+invented non-answer each time, with nothing to differentiate on. Widened
+the filter to also cover ore/soil/rock/wood, confirmed via real
+BlockTypeList assets (`Ore_*`, `Soil_*`, `Rock_*`, `Wood_*` - consistent
+prefixed naming, same pattern already relied on for flowers).
+
+**Cause 2, real infrastructure fix, honestly partial**: the only prior
+anti-repeat signal was "Things YOU remember" (Qdrant episodic memory),
+written via a fire-and-forget `_spawn()` task in `main.py` - not awaited
+before the turn returns, so a fast next turn could race ahead of it
+landing, and even when it lands, similarity/recency ranking could bury
+the just-said line. New `last_reply.py`: a plain in-memory dict, keyed by
+(npc_id, player_id), updated SYNCHRONOUSLY (no `_spawn`, no Qdrant round
+trip - nothing to race) the instant a reply is generated, read back into
+a new `NPCContext.last_reply` field and rendered as an explicit "the
+exact words you JUST said, do not repeat this" line in the prompt.
+
+**Verified the wiring is correct** (temporarily bumped debug logging):
+confirmed `last_reply_line` for turn 2 correctly contained turn 1's exact
+reply. **Verified honestly that this doesn't fully solve it**: a 6-turn
+live trial asking the same question repeatedly (with a real grounded
+block in the situation) still showed 4/5 consecutive replies verbatim
+identical, despite the model being explicitly told not to repeat them. No
+`seed` parameter is set anywhere in the request (confirmed by grepping
+the whole codebase) - llama.cpp should be sampling fresh per call at
+temperature=0.8 - but a short, low-entropy factual answer to a repeated,
+near-identical prompt appears to converge to the same highest-probability
+completion regardless. This is the same class of limitation already
+documented for GUIDE_TARGET name-preservation and the flower-honesty
+rule: the model doesn't reliably follow every instruction it's given.
+
+**Deliberately did not chase this further with more prompt wording** -
+having just fixed a real token-overflow bug caused by exactly that
+pattern (see the previous dated entry), piling on more instruction text
+against unproven benefit repeats the same mistake. If more reliable
+variety is wanted, the honest next lever is sampling parameters
+(`repeat_penalty`/`presence_penalty`/`temperature`, already at 1.15/0.4/
+0.8) or a server-side repeat-detection retry - both real, separate
+follow-up decisions, not something to bolt on unilaterally here.
+
+Boot-tested clean, jar rebuilt/reinstalled, orchestrator rebuilt/
+redeployed. The grounding widening (Cause 1) is confirmed working live;
+the anti-repeat infrastructure (Cause 2) is confirmed correctly wired but
+only a partial, honest improvement - not a guarantee.
+
 ## Tuning table
 
 See README.md — it maps symptoms (slow dialogue, world stutter, OOM) to the

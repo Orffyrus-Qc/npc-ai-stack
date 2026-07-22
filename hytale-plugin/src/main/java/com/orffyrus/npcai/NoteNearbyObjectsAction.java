@@ -17,10 +17,12 @@ import org.joml.Vector3d;
 /**
  * Runtime "NoteNearbyObjects" action - a real, tick-based scan (throttled
  * via NearbyObjects.shouldRescan(), NOT every tick) of the actual world
- * BLOCKS around this NPC for anything "notable" (plants/flowers for now),
- * feeding NearbyObjects the same way NoteNearbyThreatAction feeds
- * ThreatMemory. Runs on a bare "Any" sensor (see Adventurer.json) since
- * it's not gated on any entity being nearby - blocks aren't entities.
+ * BLOCKS around this NPC for anything "notable" (see
+ * NearbyObjects.isNotableBlockId() for the current real-block-id filter -
+ * flowers/plants/mushrooms/ore/soil/rock/wood), feeding NearbyObjects the
+ * same way NoteNearbyThreatAction feeds ThreatMemory. Runs on a bare
+ * "Any" sensor (see Adventurer.json) since it's not gated on any entity
+ * being nearby - blocks aren't entities.
  *
  * Unlike every other npc-ai-stack feature so far (zones, prefabs, map
  * markers - all queried via existing high-level real engine utilities

@@ -73,14 +73,26 @@ public final class NearbyObjects {
                 + Math.round(s.distance()) + " blocks away).";
     }
 
-    /** Real, shipped block-id substring filter - matches the actual
-     * naming convention confirmed in Server/BlockTypeList/
-     * PlantsAndTrees.json (e.g. "Plant_Flower_Common_Blue"). Shared
-     * between NoteNearbyObjectsAction's ambient scan and PlayerPointing's
+    /** Real, shipped block-id substring filter - matches actual naming
+     * conventions confirmed across several real BlockTypeList assets
+     * (e.g. "Plant_Flower_Common_Blue", "Ore_Copper_Stone", "Soil_Dirt",
+     * "Rock_Marble", "Wood_Redwood_Trunk"). Shared between
+     * NoteNearbyObjectsAction's ambient scan and PlayerPointing's
      * raycast fallback so "notable" means the same thing regardless of
-     * which one found it. */
+     * which one found it.
+     *
+     * 2026-07-22, widened from flower/plant/mushroom only after a real
+     * live report ("he continue to talk about the past things when I ask
+     * a new question") turned out to be partly caused by this: the
+     * player kept asking about real ore/soil/rock blocks this filter
+     * didn't recognize as notable at all, so the model had nothing real
+     * to ground an answer in and fell back to a vague, mostly-identical
+     * non-answer ("some kind of unusual soil or mineral") every time -
+     * confirmed directly in the real server log, repeated 8+ times. */
     public static boolean isNotableBlockId(String blockId) {
         String lower = blockId.toLowerCase();
-        return lower.contains("flower") || lower.contains("plant") || lower.contains("mushroom");
+        return lower.contains("flower") || lower.contains("plant") || lower.contains("mushroom")
+                || lower.contains("ore") || lower.contains("soil") || lower.contains("rock")
+                || lower.contains("wood");
     }
 }

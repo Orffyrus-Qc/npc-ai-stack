@@ -1,5 +1,31 @@
 🐄 **Falling Cow Zone** — see the [repo root README](../README.md).
 
+## 2026-07-22, later still: widened notable-block grounding + real anti-repeat infrastructure (partial fix)
+
+User report ("he continue to talk about the past things when I ask a new
+question") turned out, via the real server log, to be the model
+repeating the exact same reply verbatim many times in a row.
+
+Widened `NearbyObjects.isNotableBlockId()` from flower/plant/mushroom
+only to also cover ore/soil/rock/wood (confirmed via real `Ore_*`/
+`Soil_*`/`Rock_*`/`Wood_*` BlockTypeList assets) - many repeats were
+about real blocks the old filter didn't recognize, so the model had
+nothing real to say and kept landing on the same vague invented
+non-answer.
+
+Also added (orchestrator-side) a synchronous last-reply tracker
+(`last_reply.py`) as a more reliable anti-repeat signal than the existing
+fire-and-forget episodic-memory write, which could race a fast next turn.
+Confirmed correctly wired via debug logging, but honestly only a partial
+fix live-tested against real repeated questions - the model doesn't
+always follow the "don't repeat this" instruction even when given the
+literal last reply. Deliberately not chasing this further with more
+prompt text right now, having just fixed a real token-overflow bug caused
+by exactly that pattern.
+
+Boot-tested clean, jar rebuilt/reinstalled, orchestrator rebuilt/
+redeployed.
+
 ## 2026-07-22, later still: player-pointing fallback - "if it not enough precise, take what I'm pointing at"
 
 Extended environment sensing: when the NPC's own ambient look-around scan

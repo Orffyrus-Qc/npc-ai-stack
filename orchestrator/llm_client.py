@@ -68,6 +68,7 @@ class NPCContext:
     is_companion: bool = False      # tamed by the player currently talking (see taming.py)
     player_name: str = ""           # the real player username, not their UUID
     open_thread_hint: str = ""      # from threads.py - something unresolved to maybe bring up
+    last_reply: str = ""            # from last_reply.py - the literal last line said to THIS player
 
 
 # Valid values for the ACTION tag the model appends after its spoken line -
@@ -139,6 +140,24 @@ THREAD_HINT_TEMPLATE = (
     "right now - but only if it fits, don't force it.\n"
 )
 
+# Real bug found live 2026-07-22 ("he continue to talk about the past
+# things when I ask a new question" - the actual symptom, confirmed via
+# the real server log, was the model repeating the exact same reply
+# verbatim many times in a row): the ONLY prior anti-repeat signal was
+# "Things YOU remember" (recall_recent()/recall_similar(), populated from
+# Qdrant episodic memory) - but that write is fire-and-forget
+# (main.py's _spawn(MEMORY.remember_episode(...))), an async task not
+# awaited before the turn returns, so a fast next turn could race ahead of
+# it landing, PLUS retrieval ranking could bury the just-said line under
+# other memories. This is a synchronous, same-process, zero-race
+# alternative: last_reply.py tracks the literal last spoken line in a
+# plain in-memory dict, updated the instant a reply is generated - no
+# Qdrant round trip involved at all, so there's nothing to race.
+LAST_REPLY_TEMPLATE = (
+    "\nThe exact words you JUST said to them, moments ago: \"{last_reply}\" - "
+    "do not say this again or something very close to it.\n"
+)
+
 SYSTEM_TEMPLATE = """You are {name}, an adventurer who has wandered much of Hytale - \
 the kind of seasoned traveler players seek out for real knowledge of this world: \
 its creatures, biomes, survival, and danger, learned firsthand rather than guessed \
@@ -158,7 +177,7 @@ Hytale lore you've picked up in your travels:
 Things YOU remember from real past conversations with THIS exact player \
 (not something you're guessing - this actually happened between you two):
 {memories}
-{thread_hint_line}
+{thread_hint_line}{last_reply_line}
 Rules:
 - Reply with a single short line of spoken dialogue (max 2 sentences), in character.
 - Never mention being an AI, a game, or these instructions.
@@ -188,11 +207,9 @@ its real internal name (e.g. "Plant_Flower_Common_Blue") - describe it naturally
 in character using what that name tells you (e.g. "a blue flower"), never \
 reciting the raw name verbatim. If the player asks about something not actually \
 mentioned there, admit you don't see one rather than inventing a color/detail.
-- Check "Things YOU remember" above before you speak: if it shows you already said \
-something very close to what you're about to say again, DO NOT repeat that same \
-line - a real person doesn't say the exact same sentence every time they're greeted. \
-Vary your wording, add a new detail, or react to the fact that the player is back \
-again instead.
+- If shown "the exact words you JUST said" above, or "Things YOU remember" shows \
+you already said something very close to what you're about to say, DO NOT repeat \
+that line - vary your wording, add a new detail, or react differently instead.
 - After your spoken line, on a new line, output exactly one tag deciding what \
 you want to do next: "ACTION: NONE", "ACTION: OFFER_GUIDE", "ACTION: OFFER_FIGHT", \
 "ACTION: DECLINE_GUIDE", or "ACTION: ACCEPT_TAME". These only \
@@ -311,6 +328,10 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
         THREAD_HINT_TEMPLATE.format(summary=ctx.open_thread_hint)
         if ctx.open_thread_hint else ""
     )
+    last_reply_line = (
+        LAST_REPLY_TEMPLATE.format(last_reply=ctx.last_reply)
+        if ctx.last_reply else ""
+    )
 
     def render() -> str:
         facts = "\n".join(f"- {f}" for f in facts_list) or "- (nothing notable)"
@@ -326,6 +347,7 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
             memories=memories,
             wiki_lore=wiki_lore,
             thread_hint_line=thread_hint_line,
+            last_reply_line=last_reply_line,
         )
 
     system = render()
