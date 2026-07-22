@@ -1726,6 +1726,59 @@ longer gates inclusion at all.
 `UserData/Mods/NpcAiStack-0.1.0.jar`. Not yet live-confirmed against a
 non-Trork hostile (Goblin/Outlander/Scarak) - needs the next play session.
 
+## 2026-07-22, later still: "increase resources by 10" - tried raising --parallel, reverted, this was already answered
+
+Requested: "increase npc-ai-stack-git resources by 10." Asked which
+resource, since blindly bumping the wrong one (CPU/mem limits vs the LLM's
+`--parallel`) risked overshooting the documented 8-core/32GB host - user
+picked `--parallel`.
+
+**First attempt (6->16) broke real dialogue outright, confirmed live, not
+guessed.** `--ctx-size` stayed at 12288, so per-slot context
+(`ctx-size / parallel`) dropped from 2048 to 768 tokens. `llm_client.py`'s
+own `_PROMPT_TOKEN_BUDGET = 1700` (deliberately sized for a 2048-token
+slot, per its own comment) immediately exceeded the new 768-token slot.
+Redeployed, then ran a real WebSocket test (`ws_ctxcheck.py`, scratchpad)
+against the real owner UUID (pulls actual accumulated facts/memories/wiki
+lore, not an empty synthetic prompt) - every reply came back empty. The
+orchestrator log showed why: `httpx.HTTPStatusError: 400 Bad Request`, and
+llama.cpp's own log was explicit - `request (1702 tokens) exceeds the
+available context size (768 tokens)`. Reverted immediately.
+
+**Second attempt (--ctx-size 24576 / --parallel 12, keeping 2048
+tokens/slot) looked good in isolation - loaded clean, GPU usage only rose
+from ~6.3GB to ~6.9GB of 12GB, real dialogue worked - but should never
+have gotten that far.** Root README.md already had the answer, from a real
+load test on this exact GPU (2026-07-21, "real concurrency load test on
+the RTX 3060"): `--parallel 8`/`--ctx-size 16384` (still 2048 tokens/slot)
+measured the SAME throughput ceiling as `--parallel 6` (~4.6-4.9 vs ~4.7
+req/s) with noisier latency, and the table's own conclusion was explicit -
+"that ceiling is this GPU's real compute limit for a 7B Q4_K_M model, not
+a slot-count limit." I didn't check that table before testing 12. On top
+of that, `main.py`'s `DISPATCHER` (`priority_queue.py`'s
+`NPCRequestDispatcher`) hardcodes `max_concurrent_slots=6` independent of
+`docker-compose.yml` - the README says this explicitly ("if you change
+`--parallel` here, change that too or the orchestrator will simply never
+use the extra slots"), so my own concurrency test (10 real calls, 7
+succeeded, 3 `httpx.ReadTimeout`, even successes took 8-13s) was never
+actually exercising 12 real concurrent llama.cpp slots - the orchestrator
+was still gating everything to 6 at a time, same as before. That test's
+slower-than-expected numbers versus the README's own prior benchmark
+(p95 <3.8s at 12-16 concurrent *on 6 slots*, hit directly against
+llm-inference, no orchestrator/Qdrant/Postgres overhead) are more likely
+explained by testing through the full real pipeline (Qdrant/Postgres
+lookups included) than by anything about slot count.
+
+**Reverted `--parallel`/`--ctx-size` back to 6/12288** (net zero diff on
+`docker-compose.yml`, confirmed via `git diff`). Conclusion, grounded in
+this project's own already-existing real data, not a fresh guess: 6 is
+already this GPU's practical ceiling for a 7B Q4_K_M model - raising
+`--parallel` alone doesn't buy more real capacity here, it would need
+either a smaller/faster model, a second GPU, or a lower `max_tokens`
+completion budget to actually move the ceiling. Should have read the
+Tuning table below and the load-test table in README.md before touching
+this at all - flagging that as the mistake, not just the fix.
+
 ## Tuning table
 
 See README.md — it maps symptoms (slow dialogue, world stutter, OOM) to the
