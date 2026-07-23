@@ -1,9 +1,13 @@
 package com.orffyrus.npcai;
 
 import com.hypixel.hytale.logger.HytaleLogger;
+import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.event.events.player.PlayerChatEvent;
+import com.hypixel.hytale.server.core.event.events.player.PlayerReadyEvent;
 import com.hypixel.hytale.server.core.plugin.JavaPlugin;
 import com.hypixel.hytale.server.core.plugin.JavaPluginInit;
+import com.hypixel.hytale.server.core.universe.PlayerRef;
+import com.hypixel.hytale.server.core.universe.Universe;
 import com.hypixel.hytale.server.npc.NPCPlugin;
 
 import javax.annotation.Nonnull;
@@ -74,6 +78,20 @@ public class NpcAiPlugin extends JavaPlugin {
     protected void setup() {
         LOGGER.atInfo().log("Connecting to npc-ai-stack orchestrator at " + ORCHESTRATOR_URL);
         BRIDGE = new NpcAiBridge(ORCHESTRATOR_URL);
+        // Pest's evolve_notice push (see NpcAiBridge.NoticeHandler's javadoc) -
+        // resolving a UUID to a real PlayerRef and sending a chat message is
+        // real Hytale API usage, so it lives here rather than in
+        // NpcAiBridge.java (hard rule: that class stays free of Hytale imports).
+        BRIDGE.setNoticeHandler((npcId, playerId, text) -> {
+            try {
+                PlayerRef player = Universe.get().getPlayer(UUID.fromString(playerId));
+                if (player != null) {
+                    player.sendMessage(Message.raw("[" + npcId + "] " + text));
+                }
+            } catch (Exception e) {
+                LOGGER.atWarning().log("Failed to deliver notice from " + npcId + ": " + e);
+            }
+        });
         BRIDGE.connect();
 
         NPCPlugin.get().registerCoreComponentType("TalkToAI", TalkToAIActionBuilder::new);
@@ -94,6 +112,9 @@ public class NpcAiPlugin extends JavaPlugin {
         NPCPlugin.get().registerCoreComponentType("IsAwaitingReply", IsAwaitingReplySensorBuilder::new);
         LOGGER.atInfo().log("Registered IsAwaitingReply NPC sensor type");
 
+        NPCPlugin.get().registerCoreComponentType("IsManualMove", IsManualMoveSensorBuilder::new);
+        LOGGER.atInfo().log("Registered IsManualMove NPC sensor type");
+
         NPCPlugin.get().registerCoreComponentType("SeekLandmark", SeekLandmarkSensorBuilder::new);
         LOGGER.atInfo().log("Registered SeekLandmark NPC sensor type");
 
@@ -106,6 +127,25 @@ public class NpcAiPlugin extends JavaPlugin {
         PlayerChatToAIListener chatListener = new PlayerChatToAIListener(BRIDGE);
         this.getEventRegistry().registerAsyncGlobal(PlayerChatEvent.class, chatListener::onChat);
         LOGGER.atInfo().log("Registered PlayerChatEvent -> AI conversation listener");
+
+        // Mori: 2026-07-22, no longer auto-spawns on join - user wants only
+        // one default companion ("Pest", registered below). Still fully
+        // available on request: /mori spawn, /npc spawn Mori, or "Mori,
+        // hello" in chat (MoriChatRouter doesn't require a prior spawn
+        // command - PlayerChatToAIListener starts the conversation/marks
+        // companion state the first time it's addressed either way).
+        this.getCommandRegistry().registerCommand(new MoriCommand());
+        LOGGER.atInfo().log("Registered /mori companion command (no auto-spawn)");
+
+        // Pest: independent companion, same auto-spawn shape as Mori, but
+        // its dialogue routes to a real openhands-sdk agent (AIRole "pest")
+        // instead of the fast llama.cpp path - see docs/PEST_OPENHANDS_BRAIN.md.
+        PestAdventureSpawner pestSpawner = new PestAdventureSpawner();
+        this.getEventRegistry().registerGlobal(PlayerReadyEvent.class, pestSpawner::onPlayerReady);
+        LOGGER.atInfo().log("Registered PlayerReadyEvent -> Pest companion spawner");
+
+        this.getCommandRegistry().registerCommand(new PestCommand());
+        LOGGER.atInfo().log("Registered /pest companion command");
 
         new java.util.Timer(true).scheduleAtFixedRate(new java.util.TimerTask() {
             public void run() { sweepStaleConversations(); }

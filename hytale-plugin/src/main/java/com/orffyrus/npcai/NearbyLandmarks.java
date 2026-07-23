@@ -63,8 +63,12 @@ public final class NearbyLandmarks {
 
     private static final HytaleLogger LOGGER = HytaleLogger.forEnclosingClass();
 
-    /** Blocks to search outward before giving up on a given zone type. */
+    /** Blocks to search outward before giving up on a given zone type.
+     * Mori product requirement is 200-block map sense; 400 remains as a
+     * soft upper cap for non-Mori roles that still use this helper. */
     private static final int SEARCH_RADIUS = 400;
+    /** Product radius for Mori companion map awareness. */
+    private static final int MORI_MAP_RADIUS = MapSense200.RADIUS_BLOCKS;
     /** Water (Ocean/Shallow_Ocean/Shore) search radius - much larger than
      * SEARCH_RADIUS because coastline is far sparser than biome-region
      * zones. Live testing showed 400 blocks reliably found nothing at all
@@ -272,7 +276,7 @@ public final class NearbyLandmarks {
     private static List<Candidate> staticCandidates(String npcId, Ref<EntityStore> npcRef, Store<EntityStore> store) {
         return STATIC_CANDIDATES.computeIfAbsent(npcId, id -> {
             try {
-                return computeStaticCandidates(npcRef, store);
+                return computeStaticCandidates(id, npcRef, store);
             } catch (Exception e) {
                 LOGGER.atWarning().log("NearbyLandmarks static candidate search failed for " + id + ": " + e);
                 return List.of();
@@ -289,7 +293,7 @@ public final class NearbyLandmarks {
         }
     }
 
-    private static List<Candidate> computeStaticCandidates(Ref<EntityStore> npcRef, Store<EntityStore> store) {
+    private static List<Candidate> computeStaticCandidates(String npcId, Ref<EntityStore> npcRef, Store<EntityStore> store) {
         TransformComponent tc = store.getComponent(npcRef, TransformComponent.getComponentType());
         if (tc == null) return List.of();
         WorldChunk chunk = tc.getChunk();
@@ -327,7 +331,9 @@ public final class NearbyLandmarks {
                 displayName = zoneName;
             }
             String prettyName = prettify(displayName);
-            Vector3i hit = SpiralSearchUtil.search(cg, seed, x, z, SEARCH_RADIUS,
+            // Mori product: prefer 200-block map radius for zone candidates.
+            int zoneRadius = MoriChatRouter.isMoriRole(npcId) ? MORI_MAP_RADIUS : SEARCH_RADIUS;
+            Vector3i hit = SpiralSearchUtil.search(cg, seed, x, z, zoneRadius,
                     zbr -> {
                         ZoneGeneratorResult zr = zbr.getZoneResult();
                         return zr != null && zr.getZone() != null && zoneName.equals(zr.getZone().name());

@@ -3,3 +3,19 @@ httpx>=0.27
 asyncpg>=0.29
 qdrant-client>=1.10,<2.0
 fastembed>=0.3
+# Pest's brain (orchestrator/pest_brain/) - real OpenHands agent, not a
+# reimplementation. Both exact-pinned to 1.17.0 and confirmed to install
+# and import CLEANLY together inside python:3.12-slim (this image's own
+# base), not guessed from docs: LLM/Agent/Conversation/Tool/ToolDefinition/
+# register_tool all confirmed real, and list_registered_tools() (after
+# `import openhands.tools`) actually returned ['delegate', 'file_editor',
+# 'task_tool_set', 'task', 'task_tracker', 'terminal'] - pest_evolve.py
+# uses "terminal"/"file_editor". Exact-pinned (not >=) because of a real
+# gotcha hit while building this: installing openhands-tools WITHOUT an
+# explicit matching pin let pip resolve a newer openhands-sdk than that
+# openhands-tools release expected (ModuleNotFoundError:
+# openhands.sdk.utils.path) - these two packages are not safely
+# independently-latest together. Bump both in lockstep, and re-verify with
+# `docker compose run --rm pest-evolve --dry-run` after any bump.
+openhands-sdk==1.17.0
+openhands-tools==1.17.0

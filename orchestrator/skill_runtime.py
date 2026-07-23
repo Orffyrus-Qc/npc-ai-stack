@@ -104,6 +104,19 @@ class SkillRuntime:
         self._validate_output = self._load_validator(sandbox_dir / "skill_harness.py")
         self._by_npc: dict[str, Path] = {}
         self._last_scan = 0.0
+        # Pest's "please restart to activate" mechanic (docs/PEST_OPENHANDS_
+        # BRAIN.md): pest_evolve.py (a separate, offline process - see that
+        # file) can write a new approved/pest_*.py at any time, including
+        # while this orchestrator process is already running. Recording this
+        # process' own start time and refusing to activate anything newer
+        # for npc_id "pest" specifically makes the in-chat "please restart"
+        # ask real rather than decorative - a skill promoted mid-session
+        # only takes effect starting the NEXT orchestrator start, which is
+        # exactly what asking the player to restart is asking for. Every
+        # other npc_id (Mori, Adventurer) is unaffected - they never had
+        # this requirement and skill_writer.py's candidates should keep
+        # activating immediately, same as before.
+        self._process_started_at = time.time()
 
     @staticmethod
     def _load_validator(harness_path: Path):
@@ -132,6 +145,13 @@ class SkillRuntime:
             if not npc_id:
                 continue
             mtime = path.stat().st_mtime
+            # Pest-only: a skill approved after this process started isn't
+            # active yet - see __init__'s comment. Falls through to whatever
+            # older Pest skill (if any) was already approved before this
+            # boot, same "newest-among-eligible-wins" shape as every other
+            # npc_id, just with a smaller eligible set.
+            if npc_id.lower() == "pest" and mtime > self._process_started_at:
+                continue
             existing = newest.get(npc_id)
             if existing is None or mtime > existing[0]:
                 newest[npc_id] = (mtime, path)

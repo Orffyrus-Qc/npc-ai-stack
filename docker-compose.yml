@@ -10,12 +10,25 @@ services:
   # ws://localhost:8765 (gateway is folded into the orchestrator).
 
   llm-inference:
+    # --parallel bumped 6->7 (--ctx-size 18432->21504, same 3072 tokens/slot,
+    # proportional) so Pest's brain (orchestrator/pest_brain/, real
+    # openhands-sdk) has its own dedicated slot capacity, never contending
+    # with the 6 slots NPCRequestDispatcher already reserves for Mori/
+    # Adventurer dialogue+ambient (priority_queue.py, hard rule 1: dialogue
+    # always wins). Pest's own turns are additionally capped to at most 1
+    # concurrent request at the orchestrator level (pest_brain/session.py's
+    # module-level asyncio.Semaphore(1)), so the orchestrator itself never
+    # issues more than 6+1=7 concurrent requests total - exactly matching
+    # this server's capacity, so Pest structurally cannot starve a slot a
+    # dialogue request is entitled to. VRAM headroom confirmed real: the
+    # 2026-07-21 load-test table (README.md) measured ~5.5GB still free at
+    # --parallel 8 / --ctx-size 16384 on this RTX 3060 12GB.
     image: ghcr.io/ggml-org/llama.cpp:server-cuda
     command: >
       --model /models/${LLM_MODEL_FILE:-qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf}
       --n-gpu-layers 999
-      --ctx-size 18432
-      --parallel 6
+      --ctx-size 21504
+      --parallel 7
       --cont-batching
       --batch-size 512
       --host 0.0.0.0
@@ -52,12 +65,31 @@ services:
       - "127.0.0.1:8765:8765"
     environment:
       - SANDBOX_DIR=/sandbox
+      # OpenHands-style agent brain — mount host Hytale install read-only.
+      # Windows Docker Desktop example (compose .env):
+      #   HYTALE_HOST_PATH=C:/Users/You/AppData/Roaming/Hytale
+      #   PLUGIN_RUN_HOST_PATH=D:/CLAUDE_AI/npc-ai-stack-git/hytale-plugin/run
+      - HYTALE_ROOT=/hytale
+      - HYTALE_USERDATA=/hytale/UserData
+      - HYTALE_PLUGIN_RUN=/plugin-run
+      - BRAIN_ALLOW_WEB=${BRAIN_ALLOW_WEB:-0}
+      - BRAIN_MAX_STEPS=${BRAIN_MAX_STEPS:-6}
+      - BRAIN_LEARN_INTERVAL_S=${BRAIN_LEARN_INTERVAL_S:-900}
+      # Pest's brain (orchestrator/pest_brain/, real openhands-sdk) - see
+      # docs/PEST_OPENHANDS_BRAIN.md. Points at the same local llama.cpp
+      # server as everything else, no new model/cloud dependency.
+      - PEST_LLM_BASE_URL=http://llm-inference:8080/v1
+      - PEST_BRAIN_TURN_TIMEOUT_S=${PEST_BRAIN_TURN_TIMEOUT_S:-45}
+      - PEST_BRAIN_MAX_STEPS=${PEST_BRAIN_MAX_STEPS:-8}
     volumes:
       # Read-only: orchestrator/skill_runtime.py only ever reads
       # approved/*.py plus skill_harness.py/skill_runner.py - it must never
       # be able to write here (candidates/rejected/ are skill-writer's and
       # run_skill_validation.sh's alone to manage).
       - ./sandbox:/sandbox:ro
+      # Game files for the agent brain (read-only). Override host path via .env
+      - ${HYTALE_HOST_PATH:-./.hytale-mount-placeholder}:/hytale:ro
+      - ${PLUGIN_RUN_HOST_PATH:-./hytale-plugin/run}:/plugin-run:ro
     depends_on:
       llm-inference:
         condition: service_healthy
@@ -117,6 +149,36 @@ services:
       llm-inference:
         condition: service_healthy
       fact-db:
+        condition: service_healthy
+    cpus: "0.5"
+    mem_limit: 1g
+
+  # Pest's self-evolution meta-agent: NOT started by `docker compose up`
+  # (profile-gated, same shape as skill-writer above). Invoke manually or
+  # from cron during a confirmed low-player window:
+  #   docker compose run --rm pest-evolve [--dry-run]
+  # Unlike skill_writer.py (a single completion), this runs a REAL
+  # openhands-sdk Agent with Terminal+FileEditor tools - real Bash/file
+  # write access, deliberately never given to the live orchestrator
+  # process (see docs/PEST_OPENHANDS_BRAIN.md's "why this is a separate
+  # service" section). Jailed to ./sandbox/pest_workspace (writable, unlike
+  # the live orchestrator's read-only ./sandbox mount) - never the Hytale
+  # install, never approved/ directly. Output still goes through the
+  # UNCHANGED run_skill_validation.sh -> skill_harness.py gate (hard rule
+  # 4) before anything reaches approved/. Also calls llm-inference directly,
+  # bypassing NPCRequestDispatcher - same GPU-contention caveat as
+  # skill-writer: don't run while players are online.
+  pest-evolve:
+    build: ./orchestrator
+    profiles: ["tools"]
+    entrypoint: ["python", "pest_evolve.py"]
+    environment:
+      - SANDBOX_DIR=/sandbox
+      - PEST_EVOLVE_WORKSPACE=/sandbox/pest_workspace
+    volumes:
+      - ./sandbox:/sandbox
+    depends_on:
+      llm-inference:
         condition: service_healthy
     cpus: "0.5"
     mem_limit: 1g

@@ -53,6 +53,13 @@ public class NoteNearbyObjectsAction extends ActionBase {
     /** Horizontal search radius, blocks. Kept small - this is "what's on
      * the ground right around you," not a wide-area survey. */
     private static final int SCAN_RADIUS_XZ = 5;
+    /**
+     * Mori (and companions that need full local data) get a wider dense
+     * ring. Full 200-block dense voxel scan would thrash the tick; 24 is
+     * a practical "surroundings" survey, while map/zone data at 200 comes
+     * from {@link NearbyLandmarks} / {@link MapSense200}.
+     */
+    private static final int SCAN_RADIUS_XZ_MORI = 24;
     /** Vertical search range relative to the NPC's own feet - flowers/
      * plants sit at or just above ground level, never far above/below. */
     private static final int SCAN_Y_BELOW = 2;
@@ -83,10 +90,14 @@ public class NoteNearbyObjectsAction extends ActionBase {
             int cy = (int) Math.floor(pos.y);
             int cz = (int) Math.floor(pos.z);
 
+            int radius = MoriChatRouter.isMoriRole(npcId) ? SCAN_RADIUS_XZ_MORI : SCAN_RADIUS_XZ;
+            // Sparse step for wide Mori scans so tick cost stays bounded.
+            int step = radius > 8 ? 2 : 1;
+
             String bestId = null;
             double bestDistSq = Double.MAX_VALUE;
-            for (int dx = -SCAN_RADIUS_XZ; dx <= SCAN_RADIUS_XZ; dx++) {
-                for (int dz = -SCAN_RADIUS_XZ; dz <= SCAN_RADIUS_XZ; dz++) {
+            for (int dx = -radius; dx <= radius; dx += step) {
+                for (int dz = -radius; dz <= radius; dz += step) {
                     for (int dy = -SCAN_Y_BELOW; dy <= SCAN_Y_ABOVE; dy++) {
                         BlockType type = world.getBlockType(cx + dx, cy + dy, cz + dz);
                         if (type == null) continue;

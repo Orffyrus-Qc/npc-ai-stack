@@ -44,6 +44,12 @@ Orchestrator -> plugin:
   # ...), used by GuideState.Target.NAMED to search real zones/prefabs by
   # keyword (see NearbyLandmarks.closestNamedPosition()) instead of only
   # the fixed "nearest landmark"/"nearest water" choice from before.
+  #
+  # OpenHands-style brain (2026-07-22): player help/research questions
+  # ("how do I craft…", "where is…") are handled by agent_brain.AgentLoop
+  # with tools over mounted game files/map/wiki before producing "say".
+  # Self-learning runs in brain_learn_daemon on ambient GPU slots only.
+  # See docs/OPENHANDS_NPC_BRAIN.md.
 
 The plugin should treat every call as async: send the event, keep ticking,
 apply the "say" whenever it arrives. A 200ms-2s delay reads as the NPC
@@ -56,6 +62,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -71,6 +78,18 @@ from taming import TamingStore
 from threads import ThreadStore
 from wiki_ingest import run_ingest_cycle
 from wiki_knowledge import WikiKnowledgeStore
+
+# OpenHands-style agent brain (game-file tools, map, web, self-learning) - Mori/Adventurer.
+from agent_brain.curriculum import goal_from_player_text, next_curriculum_goal
+from agent_brain.experience import ExperienceStore
+from agent_brain.loop import AgentLoop, BrainSession
+from agent_brain.tools.registry import build_default_registry
+
+# Pest's brain: a real openhands-sdk agent, not a reimplementation - see
+# docs/PEST_OPENHANDS_BRAIN.md and pest_brain/__init__.py for why this is a
+# deliberately separate package from agent_brain above.
+from pest_brain.session import run_pest_turn
+from pest_brain.tools import set_wiki_search_fn
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("npc.orchestrator")
@@ -120,6 +139,35 @@ TAMING = TamingStore()
 WIKI = WikiKnowledgeStore()
 THREADS = ThreadStore()
 SKILLS = SkillRuntime(Path(os.environ.get("SANDBOX_DIR", "/sandbox")))
+EXPERIENCE = ExperienceStore()
+
+# Pest's "please restart to activate" evolve_notice push (see
+# pest_notice_daemon() and NpcAiBridge.NoticeHandler's javadoc) -
+# pest_evolve.py (a separate, offline process) appends one JSON line per
+# promoted skill here; this process polls it. Lives directly under
+# SANDBOX_DIR (not approved/) so skill_runtime.py's `*.py` glob never sees it.
+PEST_NOTICES_PATH = Path(os.environ.get("SANDBOX_DIR", "/sandbox")) / "pest_notices.jsonl"
+PEST_NOTICE_POLL_INTERVAL_S = 30.0
+
+# Set/cleared by plugin_connection() - see its comment. Single-plugin-
+# connection assumption, same as everywhere else in this file.
+_CURRENT_WS = None
+
+# How often the NPC self-learns from game files when idle (OpenHands explore loop).
+# Uses ambient GPU slots only — never steals dialogue capacity.
+BRAIN_LEARN_INTERVAL_S = int(os.environ.get("BRAIN_LEARN_INTERVAL_S", "900"))
+
+# Player phrases that should route through the tool-using brain (help / research)
+# rather than pure in-character chat. Keep conservative: ordinary RP stays on
+# the fast dialogue path.
+_HELP_RE = re.compile(
+    r"\b("
+    r"how (do|can|to)|where (do|can|is|are)|what is|what's|"
+    r"help me|can you help|teach me|explain|recipe|craft|how to|"
+    r"look up|search the|game file|wiki|map marker|find the"
+    r")\b",
+    re.I,
+)
 
 # How often wiki_refresh_daemon() re-crawls hytale.fandom.com - see that
 # function. Wiki content doesn't change hour to hour, and run_ingest_cycle()
@@ -140,6 +188,14 @@ MIN_REPLY_DELAY_S = 1.3
 # any npc_role string that doesn't match (shouldn't happen in practice with
 # only one role in play, but costs nothing to keep as a safety net).
 DEFAULT_BASELINES: dict[str, Personality] = {
+    # Mori — adventure companion (auto-spawn, name-chat, OpenHands learning).
+    "mori": Personality(warmth=0.75, aggression=0.45, humor=0.6,
+                        curiosity=0.85, trust_of_player=0.7),
+    # Pest — independent companion, same auto-spawn/follow/fight shape as
+    # Mori, but its dialogue runs on a real openhands-sdk agent (pest_brain/)
+    # instead of the fast single-shot path - see docs/PEST_OPENHANDS_BRAIN.md.
+    "pest": Personality(warmth=0.7, aggression=0.45, humor=0.5,
+                        curiosity=0.9, trust_of_player=0.7),
     # Bold and quick to trust ("easier to convince to become a companion") -
     # higher starting trust_of_player than the 0.5 default, plus enough
     # aggression to be plausibly willing to actually fight (not just guide).
@@ -185,12 +241,25 @@ async def _build_context(msg: dict) -> NPCContext:
 
     owner = await TAMING.get_owner(npc_id)
     is_companion = bool(player_id) and owner == player_id
+    # Mori/Pest adventure companions: always bonded to the speaking player
+    # without requiring an ACCEPT_TAME speech act (plugin already
+    # auto-spawns + follows both the same way).
+    if player_id and not is_companion and (
+        (msg.get("npc_role") or "").lower() in ("mori", "pest")
+        or (npc_id or "").lower() in ("mori", "pest")
+    ):
+        if await TAMING.try_tame(npc_id, player_id):
+            is_companion = True
+            owner = player_id
     # Not gated on real text/situation like memories/wiki_snippets above -
     # this is a direct per-(npc,player) lookup, not a similarity search, so
     # there's no "query" it needs. get_open_thread() itself applies the
     # mention-cooldown/cap (see threads.py) that keeps this occasional
     # rather than appearing on every single turn.
     open_thread_hint = await THREADS.get_open_thread(npc_id, player_id) if player_id else None
+    # Self-study lessons (OpenHands brain experience store) — cheap Postgres
+    # read; empty list if DB not up yet or no curriculum run has landed.
+    lessons = await EXPERIENCE.top_lessons(npc_id, limit=3)
     return NPCContext(
         npc_id=npc_id,
         name=msg.get("npc_name", npc_id),
@@ -203,10 +272,127 @@ async def _build_context(msg: dict) -> NPCContext:
         player_name=msg.get("player_name", ""),
         open_thread_hint=open_thread_hint or "",
         last_reply=last_reply.get(npc_id, player_id) if player_id else "",
+        lessons=lessons,
     )
 
 
-async def handle_dialogue(msg: dict) -> tuple[str, str, bool, str]:
+def _wants_brain_help(text: str) -> bool:
+    t = (text or "").strip()
+    if len(t) < 4:
+        return False
+    return bool(_HELP_RE.search(t))
+
+
+async def _run_brain(session: BrainSession):
+    """
+    One OpenHands-style tool loop. Each LLM step goes through the dialogue
+    GPU path so player-facing research still wins over ambient.
+    """
+    tools = build_default_registry(
+        wiki_search=lambda q: WIKI.search(q),
+    )
+    loop = AgentLoop(
+        tools=tools,
+        experience=EXPERIENCE,
+        llm_chat=lambda messages, max_tokens, temperature: DISPATCHER.request_dialogue(
+            session.npc_id,
+            lambda: LLM.complete(messages, max_tokens=max_tokens, temperature=temperature),
+        ),
+    )
+    return await loop.run(session)
+
+
+def _play_proposal_to_wire(prop: dict | None) -> tuple[str, str, str, str]:
+    """
+    Map brain play proposal → (action, guide_target, play_action, play_target).
+
+    Plugin maps go_to/explore/gather/mine onto GuideState; other intents are
+    still delivered as play_action for logging / future sensors.
+    """
+    if not prop:
+        return "none", "", "", ""
+    play_action = str(prop.get("action") or "").strip().lower()
+    play_target = str(prop.get("target") or "").strip()
+    if play_action in ("go_to", "gather", "mine", "craft", "trade", "build"):
+        # Plugin guide path already walks by keyword.
+        return "offer_guide", play_target or play_action, play_action, play_target
+    if play_action == "explore":
+        return "offer_guide", "landmark", play_action, play_target or "landmark"
+    if play_action == "fight":
+        return "offer_fight", "", play_action, play_target
+    if play_action == "rest":
+        return "none", "", play_action, play_target
+    return "none", "", play_action, play_target
+
+
+async def handle_brain_help(msg: dict) -> tuple[str, str, bool, str, str, str]:
+    """Player asked for help / research — use game files + wiki tools.
+
+    Returns (text, action, is_companion, guide_target, play_action, play_target).
+    """
+    turn_started = time.monotonic()
+    npc_id = msg["npc_id"]
+    player_id = msg.get("player_id", "")
+    text = msg.get("text", "")
+    goal = goal_from_player_text(text)
+    session = BrainSession(
+        npc_id=npc_id,
+        player_id=player_id,
+        goal=goal,
+        player_message=text,
+    )
+    try:
+        result = await _run_brain(session)
+    except Exception:
+        logger.exception("brain help failed npc=%s", npc_id)
+        result = None
+
+    if result is None or not result.say:
+        # Fall back to normal character dialogue if tools path failed.
+        return await handle_dialogue_character(msg)
+
+    # Persist as episodic memory so the NPC "remembers" helping
+    if result.say:
+        _spawn(MEMORY.remember_episode(EpisodicEntry(
+            npc_id=npc_id,
+            player_id=player_id,
+            text=(
+                f'Player asked for help: "{text[:200]}". '
+                f'I researched game files and said: "{result.say[:200]}"'
+            ),
+            ts=time.time(),
+        )))
+        last_reply.record(npc_id, player_id, result.say)
+        # Promote high-confidence research into semantic facts
+        if result.success and result.total_reward >= 0.3:
+            _spawn(MEMORY.add_fact(
+                npc_id,
+                f"Helped player with: {text[:120]} → {result.say[:200]}",
+                player_id or None,
+            ))
+
+    owner = await TAMING.get_owner(npc_id)
+    is_companion = bool(player_id) and owner == player_id
+    elapsed = time.monotonic() - turn_started
+    if elapsed < MIN_REPLY_DELAY_S:
+        await asyncio.sleep(MIN_REPLY_DELAY_S - elapsed)
+    logger.info(
+        "brain help npc=%s steps=%s reward=%.2f success=%s play=%s",
+        npc_id, result.steps, result.total_reward, result.success,
+        result.play_proposal,
+    )
+    action, guide_target, play_action, play_target = _play_proposal_to_wire(
+        result.play_proposal
+    )
+    return result.say, action, is_companion, guide_target, play_action, play_target
+
+
+async def handle_dialogue_character(msg: dict) -> tuple[str, str, bool, str, str, str]:
+    """Original in-character dialogue path (no multi-step tools).
+
+    Returns (text, action, is_companion, guide_target, play_action, play_target)
+    with play_* empty (brain-only fields).
+    """
     turn_started = time.monotonic()
     ctx = await _build_context(msg)
     raw = await DISPATCHER.request_dialogue(
@@ -307,7 +493,88 @@ async def handle_dialogue(msg: dict) -> tuple[str, str, bool, str]:
     # single turn - see the wire-send comment in plugin_connection() for why
     # a one-time action=="accept_tame" isn't enough to keep the two in sync.
     guide_target = raw.guide_target if isinstance(raw, DialogueResult) else ""
-    return text, action, ctx.is_companion, guide_target
+    return text, action, ctx.is_companion, guide_target, "", ""
+
+
+async def handle_pest_dialogue(msg: dict) -> tuple[str, str, bool, str, str, str]:
+    """
+    Pest's dialogue: a real openhands-sdk agent turn (pest_brain/), not the
+    fast single-call path Mori/Adventurer use - see
+    docs/PEST_OPENHANDS_BRAIN.md. Unlike Mori (which only detours into
+    agent_brain's lighter loop for help-like text, see _wants_brain_help),
+    EVERY Pest message goes through this - that's the whole point of a
+    separate NPC whose brain literally runs on OpenHands, not just
+    something inspired by it.
+
+    Returns (text, action, is_companion, guide_target, play_action, play_target).
+    """
+    turn_started = time.monotonic()
+    ctx = await _build_context(msg)
+    result = await run_pest_turn(ctx, msg.get("text", ""), msg.get("situation", ""))
+
+    if result.say:
+        _spawn(MEMORY.remember_episode(EpisodicEntry(
+            npc_id=ctx.npc_id,
+            player_id=msg.get("player_id", ""),
+            text=(
+                f'Player said: "{msg.get("text", "")[:200]}". '
+                f'I replied: "{result.say[:200]}"'
+            ),
+            ts=time.time(),
+        )))
+        last_reply.record(ctx.npc_id, msg.get("player_id", ""), result.say)
+
+    elapsed = time.monotonic() - turn_started
+    if elapsed < MIN_REPLY_DELAY_S:
+        await asyncio.sleep(MIN_REPLY_DELAY_S - elapsed)
+
+    logger.info(
+        "pest turn npc=%s success=%s play=%s",
+        ctx.npc_id, result.success, result.play_proposal,
+    )
+    action, guide_target, play_action, play_target = _play_proposal_to_wire(
+        result.play_proposal
+    )
+    return result.say, action, ctx.is_companion, guide_target, play_action, play_target
+
+
+async def handle_dialogue(msg: dict) -> tuple[str, str, bool, str, str, str]:
+    """
+    Route Pest's dialogue to its real OpenHands brain; everyone else (Mori,
+    Adventurer) always uses the fast single-call dialogue path.
+
+    2026-07-22: reverted routing help-like text (_wants_brain_help) to
+    agent_brain.AgentLoop's multi-step tool loop for Mori/Adventurer - live-
+    reported as "confused... doesn't seem to understand how to use it
+    wisely," and directly confirmed in the real server log: a genuine bug
+    (see loop.py's now-fixed budget-exhausted fallback) was splicing raw
+    internal tool-call bookkeeping ("[OK reward=+0.20] Assets:Common/...")
+    into what the player saw as the NPC's spoken reply whenever the small
+    local model (Qwen2.5-7B) didn't converge on answer_help/finish within
+    budget - which, empirically, was often enough for this to read as
+    "the NPC is confused" rather than an occasional edge case. Beyond that
+    one bug, real multi-step ReAct-style tool orchestration is inherently
+    less reliable on a 7B model than a single well-grounded prompt - and
+    the plain dialogue path (handle_dialogue_character -> _build_context)
+    ALREADY includes wiki-grounded knowledge (WIKI.search() populates
+    NPCContext.wiki_snippets on every real player turn, not just help-
+    routed ones), which is exactly what the user confirmed worked well
+    for "game question and recipe" before this routing was added. Net:
+    Mori/Adventurer no longer gamble on the flaky path for something the
+    reliable path already covers reasonably well.
+
+    agent_brain/handle_brain_help/_wants_brain_help are NOT deleted -
+    brain_learn_daemon's background self-study loop still uses the same
+    AgentLoop (failures there are invisible to players, gated on
+    result.success before ever becoming a semantic fact), and the
+    infrastructure remains available to revisit later. Pest is unaffected
+    either way - it never used this path; its dialogue always runs through
+    pest_brain.session.run_pest_turn (a real openhands-sdk agent, not this
+    hand-rolled loop) by design.
+    """
+    if (msg.get("npc_role") or "").lower() == "pest":
+        return await handle_pest_dialogue(msg)
+    return await handle_dialogue_character(msg)
 
 
 async def handle_ambient(msg: dict) -> str:
@@ -377,6 +644,14 @@ async def handle_outcome(msg: dict) -> None:
 
 async def plugin_connection(ws) -> None:
     logger.info("plugin connected: %s", ws.remote_address)
+    # Single-plugin-connection assumption already holds everywhere else in
+    # this file (one Hytale server per orchestrator) - tracked here so
+    # pest_notice_daemon() can push an unprompted evolve_notice at any time,
+    # not just as a reply to an in-flight request (see that daemon's
+    # docstring). Cleared on disconnect so the daemon correctly treats a
+    # gap between sessions as "nothing to send yet", not a crash.
+    global _CURRENT_WS
+    _CURRENT_WS = ws
 
     async def process(raw: str) -> None:
         try:
@@ -388,9 +663,12 @@ async def plugin_connection(ws) -> None:
         try:
             is_companion = False
             guide_target = ""
+            play_action = ""
+            play_target = ""
             if mtype == "dialogue":
                 try:
-                    text, action, is_companion, guide_target = await handle_dialogue(msg)
+                    (text, action, is_companion, guide_target,
+                     play_action, play_target) = await handle_dialogue(msg)
                 except Exception:
                     # handle_dialogue does its own real work (taming,
                     # personality, memory) beyond just the LLM call, which
@@ -435,6 +713,11 @@ async def plugin_connection(ws) -> None:
                 # to search real zones/prefabs by keyword instead of the old
                 # fixed landmark/water-only choice.
                 "guide_target": guide_target,
+                # OpenHands brain play intent (may be empty). Plugin maps
+                # go_to/explore/gather onto GuideState; rest/fight/etc. are
+                # recorded for PlayIntentState / future sensors.
+                "play_action": play_action,
+                "play_target": play_target,
             # ensure_ascii=False: 2026-07-22 real bug found live - the model
             # naturally uses em-dashes ("Emerald Wilds—I've got a feeling...")
             # in its dialogue style. json.dumps()'s default ensure_ascii=True
@@ -458,6 +741,9 @@ async def plugin_connection(ws) -> None:
             _spawn(process(raw))
     except websockets.ConnectionClosed:
         logger.info("plugin disconnected")
+    finally:
+        if _CURRENT_WS is ws:
+            _CURRENT_WS = None
 
 
 async def compression_daemon() -> None:
@@ -494,6 +780,67 @@ async def compression_daemon() -> None:
             logger.exception("compression sweep error")
 
 
+async def brain_learn_daemon() -> None:
+    """
+    Self-directed learning loop (OpenHands explore-the-workspace pattern).
+
+    When the world is quiet, the NPC works through a curriculum of goals
+    against real game files / map data, records (action, reward) experiences,
+    and writes durable lessons. Uses AMBIENT GPU slots only so live players
+    always win. Disabled if BRAIN_LEARN_INTERVAL_S <= 0.
+    """
+    if BRAIN_LEARN_INTERVAL_S <= 0:
+        logger.info("brain_learn_daemon disabled (BRAIN_LEARN_INTERVAL_S<=0)")
+        return
+    # Wait once so dialogue can settle after boot
+    await asyncio.sleep(min(120, BRAIN_LEARN_INTERVAL_S))
+    while True:
+        try:
+            goal = next_curriculum_goal()
+            # Synthetic npc id for solo Adventurer — same as live companion
+            # once one exists; still useful for lessons shared across sessions.
+            npc_ids = await PERSONALITY.all_npc_ids()
+            npc_id = npc_ids[0] if npc_ids else "adventurer_self"
+            session = BrainSession(
+                npc_id=npc_id,
+                player_id="",
+                goal=goal,
+                player_message="",
+            )
+            tools = build_default_registry(wiki_search=lambda q: WIKI.search(q))
+
+            async def ambient_llm(messages, max_tokens, temperature):
+                # Ambient path: may return "" if GPU busy — treat as abort step
+                out = await DISPATCHER.request_ambient(
+                    f"_brain_learn_{npc_id}",
+                    lambda: LLM.complete(
+                        messages, max_tokens=max_tokens, temperature=temperature
+                    ),
+                )
+                return out or '{"tool":"finish","args":{"say":"","success":false},"thought":"gpu busy"}'
+
+            loop = AgentLoop(
+                tools=tools,
+                experience=EXPERIENCE,
+                llm_chat=ambient_llm,
+                max_steps=4,  # keep self-study cheap
+            )
+            result = await loop.run(session)
+            logger.info(
+                "brain self-learn goal=%r steps=%s reward=%.2f say=%.80s",
+                goal.text[:80], result.steps, result.total_reward, result.say,
+            )
+            if result.success and result.say:
+                _spawn(MEMORY.add_fact(
+                    npc_id,
+                    f"[self-study] {goal.text[:80]} → {result.say[:180]}",
+                    None,
+                ))
+        except Exception:
+            logger.exception("brain_learn_daemon error")
+        await asyncio.sleep(BRAIN_LEARN_INTERVAL_S)
+
+
 async def wiki_refresh_daemon() -> None:
     """
     Periodic Hytale-wiki re-crawl (wiki_ingest.py). Unlike compression_daemon
@@ -514,17 +861,72 @@ async def wiki_refresh_daemon() -> None:
         await asyncio.sleep(WIKI_REFRESH_INTERVAL_S)
 
 
+async def pest_notice_daemon() -> None:
+    """
+    Delivers Pest's "please restart" evolve_notice pushes (see
+    skill_runtime.py's activation-epoch comment and pest_evolve.py) across
+    the process boundary between pest_evolve.py (a separate, offline,
+    profile-gated container - see docker-compose.yml) and this live
+    orchestrator process. pest_evolve.py appends one JSON line per promoted
+    skill to PEST_NOTICES_PATH; this polls it and forwards anything new
+    over the live plugin connection.
+
+    Fire-and-forget, same tolerance as everywhere else in this stack that
+    talks to a possibly-absent plugin connection: if no player is online
+    right when a notice lands, it's simply not delivered this cycle - there
+    is deliberately no per-notice redelivery/ack tracking (a missed toast
+    message once is a trivial, harmless gap, not a correctness bug; the
+    thing that actually matters, the skill only activating after a real
+    restart, is enforced by skill_runtime.py itself, not by this daemon).
+    """
+    seen_lines = 0
+    while True:
+        await asyncio.sleep(PEST_NOTICE_POLL_INTERVAL_S)
+        try:
+            if not PEST_NOTICES_PATH.is_file():
+                continue
+            lines = PEST_NOTICES_PATH.read_text(errors="replace").splitlines()
+            new_lines = lines[seen_lines:]
+            seen_lines = len(lines)
+            if not new_lines or _CURRENT_WS is None:
+                continue
+            for line in new_lines:
+                try:
+                    notice = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                player_id = notice.get("player_id")
+                text = notice.get("text")
+                npc_id = notice.get("npc_id", "Pest")
+                if not player_id or not text:
+                    continue
+                await _CURRENT_WS.send(json.dumps({
+                    "type": "evolve_notice", "npc_id": npc_id,
+                    "player_id": player_id, "text": text,
+                }, ensure_ascii=False))
+        except Exception:
+            logger.exception("pest_notice_daemon error")
+
+
 async def main() -> None:
     await MEMORY.start()
     await PERSONALITY.start()
     await TAMING.start()
     await WIKI.start()
     await THREADS.start()
+    await EXPERIENCE.start()
+    # Pest's brain (pest_brain/tools.py) shares the SAME wiki knowledge base
+    # every other NPC uses - wired here (not at import time) since WIKI
+    # itself is only constructed at module load, this just binds the
+    # already-existing singleton.
+    set_wiki_search_fn(WIKI.search)
     _spawn(compression_daemon())
     _spawn(wiki_refresh_daemon())
+    _spawn(brain_learn_daemon())
+    _spawn(pest_notice_daemon())
     async with websockets.serve(plugin_connection, "0.0.0.0", 8765,
                                 ping_interval=20, ping_timeout=20):
-        logger.info("orchestrator listening on :8765")
+        logger.info("orchestrator listening on :8765 (OpenHands-style brain enabled)")
         await asyncio.Future()
 
 

@@ -49,16 +49,77 @@ public class PlayerChatToAIListener {
         }
 
         UUID playerUuid = sender.getUuid();
+        String content = event.getContent();
         NpcAiPlugin.Conversation conversation = NpcAiPlugin.ACTIVE_CONVERSATIONS.get(playerUuid);
+
+        // Name-address Mori in ordinary chat ("Mori, help me") even without a
+        // prior F-key TalkToAI interact — adventure companion mode.
+        if (conversation == null && MoriChatRouter.addressesMori(content)) {
+            conversation = new NpcAiPlugin.Conversation(
+                    MoriAdventureSpawner.MORI_ROLE,
+                    MoriAdventureSpawner.MORI_DISPLAY_NAME,
+                    MoriAdventureSpawner.MORI_AI_ROLE,
+                    "You are Mori, the player's adventure companion. You follow them, "
+                            + "fight threats, and can see the map and world around you.",
+                    System.currentTimeMillis());
+            NpcAiPlugin.ACTIVE_CONVERSATIONS.put(playerUuid, conversation);
+            CompanionState.markCompanion(MoriAdventureSpawner.MORI_ROLE, playerUuid);
+            content = MoriChatRouter.stripAddress(content);
+        }
+
+        // Same pattern for Pest — a separate, independent companion whose
+        // brain is a real openhands-sdk agent (orchestrator/pest_brain/),
+        // routed via AIRole "pest" (see main.py's handle_pest_dialogue).
+        // Checked only when Mori didn't already claim this message, so
+        // "Pest, ..." never gets swallowed by Mori's own address check
+        // (the two regexes don't overlap, but keeping this mutually
+        // exclusive with the branch above avoids ever starting two
+        // conversations from one line of chat).
+        if (conversation == null && PestChatRouter.addressesPest(content)) {
+            conversation = new NpcAiPlugin.Conversation(
+                    PestAdventureSpawner.PEST_ROLE,
+                    PestAdventureSpawner.PEST_DISPLAY_NAME,
+                    PestAdventureSpawner.PEST_AI_ROLE,
+                    "You are Pest, the player's adventure companion. You follow them, "
+                            + "fight threats, and can see the map and world around you.",
+                    System.currentTimeMillis());
+            NpcAiPlugin.ACTIVE_CONVERSATIONS.put(playerUuid, conversation);
+            CompanionState.markCompanion(PestAdventureSpawner.PEST_ROLE, playerUuid);
+            content = PestChatRouter.stripAddress(content);
+        }
+
         if (conversation == null) {
             return event;
         }
         if (System.currentTimeMillis() - conversation.lastActivityMillis() > NpcAiPlugin.CONVERSATION_TIMEOUT_MILLIS) {
             NpcAiPlugin.ACTIVE_CONVERSATIONS.remove(playerUuid);
-            return event;
+            // If the timed-out line still addresses Mori, start a fresh turn.
+            if (MoriChatRouter.addressesMori(content)) {
+                conversation = new NpcAiPlugin.Conversation(
+                        MoriAdventureSpawner.MORI_ROLE,
+                        MoriAdventureSpawner.MORI_DISPLAY_NAME,
+                        MoriAdventureSpawner.MORI_AI_ROLE,
+                        "You are Mori, the player's adventure companion.",
+                        System.currentTimeMillis());
+                NpcAiPlugin.ACTIVE_CONVERSATIONS.put(playerUuid, conversation);
+                CompanionState.markCompanion(MoriAdventureSpawner.MORI_ROLE, playerUuid);
+                content = MoriChatRouter.stripAddress(content);
+            } else if (PestChatRouter.addressesPest(content)) {
+                // Same re-address-after-timeout handling for Pest.
+                conversation = new NpcAiPlugin.Conversation(
+                        PestAdventureSpawner.PEST_ROLE,
+                        PestAdventureSpawner.PEST_DISPLAY_NAME,
+                        PestAdventureSpawner.PEST_AI_ROLE,
+                        "You are Pest, the player's adventure companion.",
+                        System.currentTimeMillis());
+                NpcAiPlugin.ACTIVE_CONVERSATIONS.put(playerUuid, conversation);
+                CompanionState.markCompanion(PestAdventureSpawner.PEST_ROLE, playerUuid);
+                content = PestChatRouter.stripAddress(content);
+            } else {
+                return event;
+            }
         }
 
-        String content = event.getContent();
         // This player is in an active conversation - never let this message
         // hit normal server chat, whether or not we end up forwarding it.
         event.setCancelled(true);
@@ -70,6 +131,35 @@ public class PlayerChatToAIListener {
         if (EXIT_WORDS.contains(content.trim().toLowerCase())) {
             NpcAiPlugin.ACTIVE_CONVERSATIONS.remove(playerUuid);
             sender.sendMessage(Message.raw("(You end the conversation with " + conversation.npcName() + ")"));
+            return event;
+        }
+
+        // If already talking to Mori/Pest and the line re-addresses them, strip name.
+        if (MoriChatRouter.isMoriRole(conversation.npcId()) && MoriChatRouter.addressesMori(content)) {
+            content = MoriChatRouter.stripAddress(content);
+        } else if (PestChatRouter.isPestRole(conversation.npcId()) && PestChatRouter.addressesPest(content)) {
+            content = PestChatRouter.stripAddress(content);
+        }
+
+        // Literal manual movement command ("walk forward", "jump", "walk
+        // forward and jump") - a real, live-confirmed escape hatch for
+        // companion pathfinding getting logically stuck (see
+        // ManualMoveState's javadoc). Deliberately intercepted here, BEFORE
+        // touching the orchestrator at all - same reasoning as EXIT_WORDS
+        // above: this is a literal mechanical command, not something that
+        // needs language understanding, and it must keep working even if
+        // the orchestrator/GPU is slow or down, which is exactly when a
+        // player is most likely to reach for it.
+        ManualMoveState.Kind moveKind = ManualMoveChatParser.parse(content);
+        if (moveKind != null) {
+            NpcAiPlugin.ACTIVE_CONVERSATIONS.put(playerUuid, conversation.refreshed());
+            ManualMoveState.request(conversation.npcId(), moveKind);
+            String echo = switch (moveKind) {
+                case FORWARD -> "walk forward";
+                case JUMP -> "jump";
+                case FORWARD_JUMP -> "walk forward and jump";
+            };
+            sender.sendMessage(Message.raw("(You tell " + conversation.npcName() + " to " + echo + ".)"));
             return event;
         }
 
@@ -92,6 +182,13 @@ public class PlayerChatToAIListener {
         if (!nearbyObjects.isEmpty()) {
             fullSituation += " " + nearbyObjects;
         }
+        // Map sense: zones, prefabs, player markers within ~200 blocks (Mori + Pest).
+        if (MoriChatRouter.isMoriRole(conversation.npcId()) || PestChatRouter.isPestRole(conversation.npcId())) {
+            String mapSense = MapSense200.describeCached(conversation.npcId());
+            if (!mapSense.isEmpty()) {
+                fullSituation += " " + mapSense;
+            }
+        }
 
         // See TalkToAIAction's matching comment - shows the "thinking"
         // particle above this NPC's head until the callback below clears it.
@@ -105,7 +202,7 @@ public class PlayerChatToAIListener {
                 sender.getUsername(),
                 content,
                 fullSituation,
-                (id, text, action, isCompanion, guideTarget) -> {
+                (id, text, action, isCompanion, guideTarget, playAction, playTarget) -> {
                     // Same staleness concern as TalkToAIAction: this fires on
                     // the WebSocket thread after the real LLM round trip, so
                     // re-resolve a fresh PlayerRef from the UUID instead of
@@ -131,6 +228,7 @@ public class PlayerChatToAIListener {
                     if (isCompanion) {
                         CompanionState.markCompanion(id, playerUuid);
                     }
+                    boolean guided = false;
                     if ("offer_guide".equals(action)) {
                         // 2026-07-22: uses the model's own GUIDE_TARGET
                         // keyword now (see GuideState.startGuidingFromKeyword's
@@ -142,7 +240,10 @@ public class PlayerChatToAIListener {
                         // richer keyword ("temple", "desert", "cave", ...)
                         // than a fixed water-or-not binary ever could.
                         GuideState.startGuidingFromKeyword(id, playerUuid, guideTarget);
+                        guided = true;
                     }
+                    PlayIntentState.applyFromOrchestrator(
+                            id, playerUuid, playAction, playTarget, guided);
                 });
 
         return event;

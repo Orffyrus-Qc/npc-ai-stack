@@ -1,0 +1,600 @@
+{
+  "Type": "Generic",
+  "Parameters": {
+    "NameTranslationKey": {
+      "Value": "server.npcRoles.Mori.name",
+      "Description": "Translation key for NPC name display"
+    }
+  },
+  "StartState": "Idle",
+  "DefaultNPCAttitude": "Ignore",
+  "DefaultPlayerAttitude": "Friendly",
+  "Appearance": "Kweebec_Rootling",
+  "AttitudeGroup": "Kweebec",
+  "MaxHealth": 80,
+  "IsMemory": true,
+  "MemoriesCategory": "Mori",
+  "NameTranslationKey": { "Compute": "NameTranslationKey" },
+  "DisableDamageGroups": [ "Self" ],
+  "CombatConfig": {
+    "EntityEffect": "Immunity_Environmental"
+  },
+  "BusyStates": [ "$Interaction" ],
+  "Invulnerable": false,
+  "KnockbackScale": 0.5,
+  "MotionControllerList": [
+    {
+      "Type": "Walk",
+      "MaxWalkSpeed": 8,
+      "Gravity": 10,
+      "RunThreshold": 0.3,
+      "MaxFallSpeed": 15,
+      "MaxRotationSpeed": 360,
+      "Acceleration": 10
+    }
+  ],
+  "Instructions": [
+    {
+      "Instructions": [
+        {
+          "$Comment": "Idle state - no player nearby",
+          "Sensor": {
+            "Type": "State",
+            "State": "Idle"
+          },
+          "Instructions": [
+            {
+              "$Comment": "Wave at player when they approach",
+              "ActionsBlocking": true,
+              "Sensor": {
+                "Type": "Player",
+                "Range": 8
+              },
+              "Actions": [
+                {
+                  "Type": "PlayAnimation",
+                  "Slot": "Status",
+                  "Animation": "Wave"
+                },
+                {
+                  "Type": "State",
+                  "State": "Watching"
+                }
+              ]
+            },
+            {
+              "Sensor": {
+                "Type": "Any"
+              },
+              "BodyMotion": {
+                "Type": "Nothing"
+              }
+            }
+          ]
+        },
+        {
+          "$Comment": "Watching state - player is nearby, just watch them",
+          "Sensor": {
+            "Type": "State",
+            "State": "Watching"
+          },
+          "Instructions": [
+            {
+              "$Comment": "Watch nearby players with head - but NOT while fighting/chasing a hostile (see the And+Not below). 2026-07-22: this node has Continue:true so it ran every tick regardless of what else matched, competing with the melee/chase combat nodes' own HeadMotion:Watch (which watches the locked hostile Target, confirmed via disassembly of HeadMotionWatch.computeSteering() - it resolves its target from THIS node's own Sensor-derived InfoProvider, not some single global 'last write wins' state) - live-reported bug: the companion kept looking at its owner instead of the monster it was fighting/charging at. Fixed by making this node simply not match at all while any hostile is locked (Target sensor with a generously large Range, functioning as 'is anything currently locked as Target regardless of distance') rather than relying on unverified assumptions about which of two simultaneously-matching HeadMotion assignments would win.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "Player", "Range": 12 },
+                  {
+                    "Type": "Not",
+                    "Sensor": { "Type": "Target", "Range": 999 }
+                  }
+                ]
+              },
+              "HeadMotion": {
+                "Type": "Watch"
+              }
+            },
+            {
+              "$Comment": "\"AI process message waiting\" indicator: a floating thought-bubble particle above this NPC's head while npc-ai-stack is waiting on a real orchestrator round trip - a reply that just appears in chat with zero visual buildup reads as unnaturally instant. Real, shipped particle asset (Server/Particles/NPC/Emotions/Question_Subtle.particlesystem); Offset [0, 2.1, 0] confirmed correct for this Kweebec-based model via the real, shipped Component_Kweebec_Instruction_Search.json (same offset, its own 'Question' particle). Re-fire throttling lives in IsAwaitingReplySensor.java itself (a 2s per-NPC cooldown), NOT the JSON \"Once\" modifier - confirmed via disassembly and live testing that \"Once\" only means \"once per STATE ENTRY\" here (paired with an unconditional \"Any\" sensor in every real shipped usage), not \"once per rising edge of a condition\" - this condition can flip true/false many times within one uninterrupted Watching visit (once per chat message), so \"Once\" latched after the first reply and never fired again; see IsAwaitingReplySensor.java's docstring for the full story.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "IsAwaitingReply"
+              },
+              "Actions": [
+                {
+                  "Type": "SpawnParticles",
+                  "Offset": [ 0, 2.1, 0 ],
+                  "ParticleSystem": "Question_Subtle"
+                }
+              ]
+            },
+            {
+              "$Comment": "2026-07-22, \"npc must sense its environment\": real, tick-based (but throttled internally - see NearbyObjects.RESCAN_INTERVAL_MILLIS, NOT a JSON-level throttle) scan of the actual world BLOCKS around this NPC for anything notable (plants/flowers), feeding NearbyObjects the same way the node below feeds ThreatMemory. Unconditional \"Any\" sensor since blocks aren't entities - there's nothing for a Mob/Player sensor to match against here. Reports the raw real block id (e.g. \"Plant_Flower_Common_Blue\") rather than trying to parse a color out of it in Java - see NoteNearbyObjectsAction's javadoc for why that's left to the model (confirmed via the real, shipped PlantsAndTrees.json block list that color is baked into these specific real ids already).",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Any"
+              },
+              "Actions": [
+                {
+                  "Type": "NoteNearbyObjects"
+                }
+              ]
+            },
+            {
+              "$Comment": "Adventurer-specific: notice nearby hostile creatures, feeds npc-ai-stack's ThreatMemory so the AI can react to it in conversation. LockOnTarget makes the found hostile the locked \"Target\" the chase/attack nodes below react to. 2026-07-21: switched the real gating to a custom \"IsHostileSpecies\" Filter (EntityFilterHostileSpecies.java) instead of relying on the Attitude Prioritiser's pairwise AttitudesByPriority match, after \"npc must be hostile to all enemy\" turned up a second, deeper bug than the earlier [Hostile,Neutral] widening fixed: WorldSupport.getAttitude() (AttitudeView.getAttitude, confirmed via disassembly) resolves PAIRWISE - per-entity override, then an AttitudeGroup lookup (each species' own shipped \"Groups\" JSON lists which OTHER group names it holds Hostile toward), then finally falls back to the OBSERVER's (Adventurer's) own DefaultNPCAttitude (\"Ignore\"). Fetched the real shipped AttitudeGroup assets live: only Trork.json lists \"Kweebec\" (Adventurer's AttitudeGroup) as Hostile - Goblin.json's Hostile list is empty, Outlander.json has no Hostile key at all, Scarak.json is hostile only to \"Feran\". So the pairwise system only ever recognized Trork as an enemy; every other hostile species fell through to Adventurer's own \"Ignore\" default and was silently excluded (an unlisted attitude reaching SensorEntityPrioritiserAttitude.getPriority() throws IllegalStateException - confirmed it's excluded upstream via the Prioritiser's own buildProvidedFilters(), an implicit inclusion filter). IsHostileSpecies instead reads the CANDIDATE's own DefaultPlayerAttitude directly (the one flag every dangerous vanilla mob sets consistently, since it's literally what makes them attack players) - a species-agnostic signal, not a narrow rivalry lookup. AttitudesByPriority widened to include \"Ignore\" (plus Friendly/Revered for safety) so the Prioritiser's own implicit filter never rejects a candidate IsHostileSpecies already matched - it now only ranks among survivors (pairwise-Hostile ranked above pairwise-Ignore, a reasonable tiebreak when multiple threats are present). Not yet live-confirmed against a non-Trork hostile (Goblin/Outlander/Scarak) - see hytale-plugin/README.md.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Mob",
+                "Range": 200,
+                "GetPlayers": false,
+                "GetNPCs": true,
+                "LockOnTarget": true,
+                "Filters": [
+                  { "Type": "IsHostileSpecies" }
+                ],
+                "Prioritiser": {
+                  "Type": "Attitude",
+                  "AttitudesByPriority": [ "Hostile", "Neutral", "Ignore", "Friendly", "Revered" ]
+                }
+              },
+              "Actions": [
+                {
+                  "Type": "NoteNearbyThreat"
+                }
+              ]
+            },
+            {
+              "$Comment": "Mori reactive defense — 200-block threat awareness when player/self is attacked.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "EntityEvent",
+                    "Range": 200,
+                    "EventType": "Damage",
+                    "NPCGroup": "Player",
+                    "SearchType": "PlayerOnly"
+                  },
+                  {
+                    "Type": "Mob",
+                    "Range": 200,
+                    "GetPlayers": false,
+                    "GetNPCs": true,
+                    "LockOnTarget": true,
+                    "Filters": [
+                      { "Type": "IsHostileSpecies" }
+                    ],
+                    "Prioritiser": {
+                      "Type": "Attitude",
+                      "AttitudesByPriority": [ "Hostile", "Neutral", "Ignore", "Friendly", "Revered" ]
+                    }
+                  }
+                ]
+              },
+              "Actions": [
+                {
+                  "Type": "NoteNearbyThreat"
+                }
+              ]
+            },
+            {
+              "$Comment": "Real, shipped 'Damage' sensor Type (Combat: true) - confirmed via disassembly of SensorDamage/BuilderSensorDamage AND via its real usage in Server/NPC/Roles/_Core/Components/Steps/Component_Instruction_Damage_Check.json (the neutral Kweebec's own Panic trigger). Reports a player physically attacking this NPC as a real outcome (personality.py's player_attacked_npc) - see NoteAttackedByPlayerAction.java. Not yet live-confirmed against a real attack (this NPC role sets Invulnerable:true; grounded in PlayerDamageFilterSystem's own pattern of cancelling damage via a flag on an event that still fires, rather than suppressing the event entirely, but that's inference from disassembly, not a live test).",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Damage",
+                "Combat": true
+              },
+              "Actions": [
+                {
+                  "Type": "NoteAttackedByPlayer",
+                  "AIRole": "adventurer"
+                }
+              ]
+            },
+            {
+              "$Comment": "Clear wave animation after delay",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Any"
+              },
+              "Actions": [
+                {
+                  "Type": "Timeout",
+                  "Delay": [ 2, 2 ],
+                  "Action": {
+                    "Type": "PlayAnimation",
+                    "Slot": "Status"
+                  }
+                }
+              ]
+            },
+            {
+              "$Comment": "2026-07-22, manual-move escape hatch: player said \"walk forward and jump\" (etc, see ManualMoveChatParser.java) - a real, live-confirmed fix for companion pathfinding getting logically stuck (SeekLandmarkSensor's own diagnostic logging showed real guide/follow distance frozen at the exact same value across many ticks before giving up - the real A*-based Seek pathfinder, confirmed via disassembly of BodyMotionFindBase, can decide it has no usable route even when a short manual nudge would free it). Highest priority in this state (placed above Idle-return/guide/combat/follow) since this is an explicit, urgent player override - safe to do because IsManualMove self-consumes after firing exactly once (ManualMoveState.consume(), same Java-side one-shot pattern IsAwaitingReplySensor already established - the JSON \"Once\" modifier means \"once per state entry\", not \"once per rising edge\", the wrong tool here). No real \"Jump\" NPC action exists anywhere in the engine (confirmed via disassembly of NPCPlugin's full body-motion registration table) - implemented instead as a short, forward-biased Teleport nudge using the real MaxYOffset field (confirmed via disassembly of BuilderBodyMotionTeleport), the same proven mechanism already used for the follow-teleport-catchup feature below. OffsetSector is relative to the NPC's OWN current facing (confirmed via disassembly of BodyMotionTeleport - it reads TransformComponent.getRotation() as the reference direction), so a narrow sector genuinely reads as \"forward\". Orientation:Unchanged keeps facing the same way rather than spinning to face the landing spot - reads as \"stepped forward\", not \"teleported\".",
+              "Sensor": { "Type": "And", "Sensors": [
+                { "Type": "Player", "Range": 999 },
+                { "Type": "IsManualMove", "Kind": "FORWARD" }
+              ] },
+              "BodyMotion": {
+                "Type": "Teleport",
+                "OffsetRange": [ 1.5, 2.5 ],
+                "OffsetSector": 60,
+                "MaxYOffset": 0.6,
+                "Orientation": "Unchanged"
+              }
+            },
+            {
+              "$Comment": "Manual-move: jump in place - see the FORWARD node's $Comment above for the full mechanism/reasoning. Small OffsetRange (not 0) so this doesn't land in the exact same spot, which would look like nothing happened when the point is specifically to break out of a wedged/stuck position; the real vertical MaxYOffset is what makes this read as a hop rather than a sidestep.",
+              "Sensor": { "Type": "And", "Sensors": [
+                { "Type": "Player", "Range": 999 },
+                { "Type": "IsManualMove", "Kind": "JUMP" }
+              ] },
+              "BodyMotion": {
+                "Type": "Teleport",
+                "OffsetRange": [ 0.3, 0.8 ],
+                "OffsetSector": 90,
+                "MaxYOffset": 1.5,
+                "Orientation": "Unchanged"
+              }
+            },
+            {
+              "$Comment": "Manual-move: walk forward and jump - see the FORWARD node's $Comment above for the full mechanism/reasoning. Same forward bias as FORWARD, same vertical hop as JUMP.",
+              "Sensor": { "Type": "And", "Sensors": [
+                { "Type": "Player", "Range": 999 },
+                { "Type": "IsManualMove", "Kind": "FORWARD_JUMP" }
+              ] },
+              "BodyMotion": {
+                "Type": "Teleport",
+                "OffsetRange": [ 1.5, 2.5 ],
+                "OffsetSector": 60,
+                "MaxYOffset": 1.5,
+                "Orientation": "Unchanged"
+              }
+            },
+            {
+              "$Comment": "Return to Idle when player leaves (clear animation first) - but NEVER for a tamed companion, regardless of how far its owner currently is. 2026-07-22 real bug found live (\"tamed npc companion must always know where I am and always follow me\"): this node has no Continue and sits ABOVE the follow/teleport nodes below, so if the owner exceeded 12 blocks and no OTHER player happened to be nearby, this fired FIRST and kicked the companion back to Idle state entirely - abandoning the follow/teleport logic before it could ever run, regardless of how generous their own Range values were. Idle state has no owner-tracking logic at all (just wave-if-a-player-approaches), so a companion that fell back to Idle this way would simply stand still forever once its owner got far enough away. Fixed by never leaving Watching for a companion at all - see the follow/teleport nodes below for how it actually stays with a far-away owner instead.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "Not", "Sensor": { "Type": "IsCompanion" } },
+                  {
+                    "Type": "Not",
+                    "Sensor": {
+                      "Type": "Player",
+                      "Range": 12
+                    }
+                  }
+                ]
+              },
+              "Actions": [
+                {
+                  "Type": "PlayAnimation",
+                  "Slot": "Status"
+                },
+                {
+                  "Type": "State",
+                  "State": "Idle"
+                }
+              ]
+            },
+            {
+              "$Comment": "Guiding, avoid danger: hostile very close while actively guiding - back away rather than engage or blindly walk toward it. Real, shipped 'Flee' BodyMotion (confirmed via the real, shipped Test_Walk_Flee.json - the only place this engine's Flee type is demonstrated; StopDistance/SlowDownDistance/Falloff match that test file's own values). 2026-07-22, added for \"npc will avoid fight by ajusting his path\" while guiding: this whole guide tier is now positioned ABOVE the melee/chase combat nodes below (previously combat came first and would abandon an active guide to fight) - a tamed companion never engages combat at all while guiding, full stop. This specific node only fires when a hostile is genuinely close (8 blocks) rather than merely detected somewhere within the normal 30-block threat-detection range, so routine guiding isn't constantly interrupted by a hostile that's nowhere near the path. Once the hostile is no longer within 8 blocks, this stops matching and falls through to the normal seek-toward-destination node below - the companion resumes its route automatically, no separate 'resume' logic needed.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "SeekLandmark" },
+                  {
+                    "Type": "Mob",
+                    "Range": 8,
+                    "GetPlayers": false,
+                    "GetNPCs": true,
+                    "Filters": [
+                      { "Type": "IsHostileSpecies" }
+                    ]
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Flee",
+                "StopDistance": 10,
+                "SlowDownDistance": 6,
+                "Falloff": 3
+              }
+            },
+            {
+              "$Comment": "Guiding, wait for the player: pause rather than beeline ahead if the owner has fallen behind, instead of dragging them along at whatever pace the destination search happens to want. 2026-07-22, added for \"npc must be able to move and wait for me... before to continue\": gated on the same owner-scoped Player+IsOwner sensor the normal follow logic already uses. Once the owner catches back up (within 15 blocks), this stops matching and falls through to the normal seek-toward-destination node below - resumes automatically, same self-limiting shape as the flee node above. 2026-07-22, later still: added the explicit IsCompanion gate after a real bug found live - offer_guide isn't gated on companion status (any player can ask for directions, not just an owner), so for an UNTAMED npc, IsOwner never matches anyone at all, making \"NOT(owner within 15 blocks)\" vacuously TRUE forever - this node matched every single tick regardless of where the real player stood, and the npc just stood still (BodyMotion:Nothing) for the entire guide, confirmed via the new SeekLandmarkSensor diagnostic logging showing distance stuck at exactly the starting value for 60 straight seconds before giving up. Only a real tamed companion has an owner worth waiting for.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "SeekLandmark" },
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "Not",
+                    "Sensor": {
+                      "Type": "Player",
+                      "Range": 15,
+                      "Filters": [
+                        { "Type": "IsOwner" }
+                      ]
+                    }
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Nothing"
+              }
+            },
+            {
+              "$Comment": "Guiding: the AI decided OFFER_GUIDE (see llm_client.py) and GuideState.startGuiding()/startGuidingFromKeyword() was called - walk toward NearbyLandmarks.closestPosition()/closestNamedPosition() until SeekLandmarkSensor reports arrival (it stops matching automatically, no separate arrival check needed here). 2026-07-22: this whole guide tier (this node plus the flee/wait nodes above) now takes priority over BOTH combat (melee/chase below) and merely following the player - a companion never abandons an active guide to fight, and only pauses (see the wait node above) rather than skipping ahead when the owner falls behind.",
+              "Sensor": {
+                "Type": "SeekLandmark"
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 1,
+                "StopDistance": 2,
+                "SlowDownDistance": 5,
+                "Falloff": 2,
+                "RelaxedMoveConstraints": true
+              }
+            },
+            {
+              "$Comment": "Companion combat, melee range: once tamed, if a hostile is locked as Target and close enough, attack it. Real \"Attack\" action (confirmed via disassembly of BuilderActionAttack, and via real shipped usage in Component_Instruction_Attack_Sequence_Spirit.json/Component_Instruction_Intelligent_Idle_Goblin.json) - \"Root_NPC_Attack_Melee\" is the same generic melee attack pattern the real, shipped Tamed_Cow.json uses, not a made-up interaction id. This node has no Continue, so it takes priority over chasing/following below whenever it matches - but the guide tier above it now wins outright whenever actively guiding (see those nodes' $Comments), so this never fires mid-guide.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  { "Type": "Target", "Range": 3 }
+                ]
+              },
+              "Actions": [
+                {
+                  "Type": "Attack",
+                  "Attack": "Root_NPC_Attack_Melee",
+                  "AttackPauseRange": [ 1, 2 ]
+                }
+              ],
+              "HeadMotion": {
+                "Type": "Watch"
+              },
+              "BodyMotion": {
+                "Type": "Nothing"
+              }
+            },
+            {
+              "$Comment": "Companion combat, chase: hostile locked as Target but not yet in melee range - close the distance. Takes priority over following the player (no Continue) whenever a hostile is being chased - but, like melee above, never fires mid-guide since the guide tier is now positioned earlier. HeadMotion:Watch added 2026-07-22 alongside the fix above that stops the player-watch node from competing during combat - watches the locked hostile (same Target sensor context the melee block above already uses for its own HeadMotion:Watch) so the companion visibly looks at what it's charging toward instead of having no head motion at all.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  { "Type": "Target", "Range": 200 }
+                ]
+              },
+              "HeadMotion": {
+                "Type": "Watch"
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 1,
+                "StopDistance": 2,
+                "SlowDownDistance": 5,
+                "Falloff": 2,
+                "RelaxedMoveConstraints": true
+              }
+            },
+            {
+              "$Comment": "Mori always-follow teleport catch-up (owner within 400, beyond 120).",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "Player",
+                    "Range": 400,
+                    "Filters": [
+                      { "Type": "IsOwner" }
+                    ]
+                  },
+                  {
+                    "Type": "Not",
+                    "Sensor": {
+                      "Type": "Player",
+                      "Range": 120,
+                      "Filters": [
+                        { "Type": "IsOwner" }
+                      ]
+                    }
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Teleport",
+                "OffsetRange": [ 3, 5 ],
+                "OffsetSector": 360
+              }
+            },
+            {
+              "$Comment": "Mori always follow owner (up to 200 blocks walk range). 2026-07-22, live-reported 'NPC keep running in circle': this Seek node only ever set RelativeSpeed/StopDistance - confirmed via disassembly of the real BuilderBodyMotionFind (the concrete class 'Seek' resolves to) that it also has slowDownDistance/falloff fields, already used correctly on this same role's own Flee nodes but never applied here. With no deceleration zone, the companion closed on a stationary/slow-moving owner at full RelativeSpeed right up to StopDistance, overshot, its steering reversed to come back, overshot again - a textbook seek-without-arrive orbit, not a pathfinding failure. SlowDownDistance/Falloff added to taper speed down approaching StopDistance instead of stopping abruptly.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "Player",
+                    "Range": 200,
+                    "Filters": [
+                      { "Type": "IsOwner" }
+                    ]
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 1,
+                "StopDistance": 3,
+                "SlowDownDistance": 7,
+                "Falloff": 2,
+                "RelaxedMoveConstraints": true
+              }
+            },
+            {
+              "Sensor": {
+                "Type": "Any"
+              },
+              "BodyMotion": {
+                "Type": "Nothing"
+              }
+            }
+          ]
+        },
+        {
+          "$Comment": "Interaction state - look at the talking player",
+          "Sensor": {
+            "Type": "State",
+            "State": "$Interaction"
+          },
+          "Instructions": [
+            {
+              "Continue": true,
+              "Sensor": {
+                "Type": "Target",
+                "Range": 10
+              },
+              "HeadMotion": {
+                "Type": "Watch"
+              }
+            },
+            {
+              "$Comment": "Same \"AI process message waiting\" indicator as the Watching state above - the very start of a click-triggered conversation's wait happens here, in $Interaction, before the ~1s Timeout below reverts to Watching.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "IsAwaitingReply"
+              },
+              "Actions": [
+                {
+                  "Type": "SpawnParticles",
+                  "Offset": [ 0, 2.1, 0 ],
+                  "ParticleSystem": "Question_Subtle"
+                }
+              ]
+            },
+            {
+              "$Comment": "Keep following even while starting a conversation - $Interaction only lasts ~1s before the Timeout below returns to Watching, but without this an established companion visibly freezes for that second every time the player clicks to talk. Continue:true is required here so the Timeout node below still runs every tick regardless of whether this one matches - without it, a nearby companion would get stuck in $Interaction forever. Same owner-scoped IsOwner Filter as the Watching state's matching block - see its $Comment for why. Range/RelativeSpeed matched to the Watching state's own 2026-07-22 widening (30->100, 0.9->1.0) for consistency - no teleport-catch-up node here though, since interacting requires the player to already be close enough to click in the first place, so the huge-separation case that node exists for can't apply during this specific ~1s window.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "Player",
+                    "Range": 200,
+                    "Filters": [
+                      { "Type": "IsOwner" }
+                    ]
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 1,
+                "StopDistance": 3,
+                "SlowDownDistance": 7,
+                "Falloff": 2,
+                "RelaxedMoveConstraints": true
+              }
+            },
+            {
+              "$Comment": "Return to Watching after interaction ends",
+              "Sensor": {
+                "Type": "Any"
+              },
+              "Actions": [
+                {
+                  "Type": "Timeout",
+                  "Delay": [ 1, 1 ],
+                  "Action": {
+                    "Type": "Sequence",
+                    "Actions": [
+                      {
+                        "Type": "ReleaseTarget"
+                      },
+                      {
+                        "Type": "State",
+                        "State": "Watching"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "InteractionInstruction": {
+    "Instructions": [
+      {
+        "Sensor": {
+          "Type": "Not",
+          "Sensor": {
+            "Type": "CanInteract",
+            "ViewSector": 180
+          }
+        },
+        "Actions": [
+          {
+            "Type": "SetInteractable",
+            "Interactable": false
+          }
+        ]
+      },
+      {
+        "Continue": true,
+        "Sensor": {
+          "Type": "Any"
+        },
+        "Actions": [
+          {
+            "Type": "SetInteractable",
+            "Interactable": true,
+            "Hint": "server.interactionHints.trade"
+          }
+        ]
+      },
+      {
+        "Sensor": {
+          "Type": "HasInteracted"
+        },
+        "Instructions": [
+          {
+            "Sensor": {
+              "Type": "Not",
+              "Sensor": {
+                "Type": "State",
+                "State": "$Interaction"
+              }
+            },
+            "Actions": [
+              {
+                "Type": "LockOnInteractionTarget"
+              },
+              {
+                "Type": "TalkToAI",
+                "DisplayName": "Mori",
+                "AIRole": "mori"
+              },
+              {
+                "Type": "State",
+                "State": "$Interaction"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

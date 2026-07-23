@@ -1,0 +1,599 @@
+{
+  "Type": "Generic",
+  "Parameters": {
+    "NameTranslationKey": {
+      "Value": "server.npcRoles.Pest.name",
+      "Description": "Translation key for NPC name display"
+    }
+  },
+  "StartState": "Idle",
+  "DefaultNPCAttitude": "Ignore",
+  "DefaultPlayerAttitude": "Friendly",
+  "Appearance": "Kweebec_Rootling",
+  "AttitudeGroup": "Kweebec",
+  "MaxHealth": 80,
+  "IsMemory": true,
+  "MemoriesCategory": "Pest",
+  "NameTranslationKey": { "Compute": "NameTranslationKey" },
+  "DisableDamageGroups": [ "Self" ],
+  "CombatConfig": {
+    "EntityEffect": "Immunity_Environmental"
+  },
+  "BusyStates": [ "$Interaction" ],
+  "Invulnerable": false,
+  "KnockbackScale": 0.5,
+  "MotionControllerList": [
+    {
+      "Type": "Walk",
+      "MaxWalkSpeed": 8,
+      "Gravity": 10,
+      "RunThreshold": 0.3,
+      "MaxFallSpeed": 15,
+      "MaxRotationSpeed": 360,
+      "Acceleration": 10
+    }
+  ],
+  "Instructions": [
+    {
+      "Instructions": [
+        {
+          "$Comment": "Idle state - no player nearby",
+          "Sensor": {
+            "Type": "State",
+            "State": "Idle"
+          },
+          "Instructions": [
+            {
+              "$Comment": "Wave at player when they approach",
+              "ActionsBlocking": true,
+              "Sensor": {
+                "Type": "Player",
+                "Range": 8
+              },
+              "Actions": [
+                {
+                  "Type": "PlayAnimation",
+                  "Slot": "Status",
+                  "Animation": "Wave"
+                },
+                {
+                  "Type": "State",
+                  "State": "Watching"
+                }
+              ]
+            },
+            {
+              "Sensor": {
+                "Type": "Any"
+              },
+              "BodyMotion": {
+                "Type": "Nothing"
+              }
+            }
+          ]
+        },
+        {
+          "$Comment": "Watching state - player is nearby, just watch them. Behavior tree mirrors Mori.json 1:1 (same generic Java sensors/actions - CompanionState/GuideState/ThreatMemory/NearbyObjects/AwaitingReplyState are all npc_id-keyed already, not hardcoded to Mori) - see Mori.json's own $Comments for the full history/reasoning behind each node. Pest's brain (what decides WHAT to say) is a separate, real openhands-sdk agent (orchestrator/pest_brain/) - this behavior tree (follow/combat/perception) is pure engine-side AI, identical mechanism for both companions, zero LLM involved.",
+          "Sensor": {
+            "Type": "State",
+            "State": "Watching"
+          },
+          "Instructions": [
+            {
+              "$Comment": "Watch nearby players with head - but NOT while fighting/chasing a hostile (see the And+Not below). Matches Mori.json's fix for the same head-tracking-during-combat bug.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "Player", "Range": 12 },
+                  {
+                    "Type": "Not",
+                    "Sensor": { "Type": "Target", "Range": 999 }
+                  }
+                ]
+              },
+              "HeadMotion": {
+                "Type": "Watch"
+              }
+            },
+            {
+              "$Comment": "\"AI process message waiting\" indicator - see Mori.json's matching node for the full reasoning (Question_Subtle particle, self-throttled in IsAwaitingReplySensor.java, not the JSON Once modifier). Pest's brain calls take real OpenHands multi-step reasoning, which can run noticeably longer than Mori's single-shot dialogue call - this indicator matters even more here.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "IsAwaitingReply"
+              },
+              "Actions": [
+                {
+                  "Type": "SpawnParticles",
+                  "Offset": [ 0, 2.1, 0 ],
+                  "ParticleSystem": "Question_Subtle"
+                }
+              ]
+            },
+            {
+              "$Comment": "Environment scan (nearby notable blocks) - feeds NearbyObjects, same as Mori.json.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Any"
+              },
+              "Actions": [
+                {
+                  "Type": "NoteNearbyObjects"
+                }
+              ]
+            },
+            {
+              "$Comment": "Notice nearby hostile creatures (species-agnostic via IsHostileSpecies filter) - feeds ThreatMemory and locks Target for the chase/attack nodes below. Same mechanism as Mori.json/Adventurer.json.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Mob",
+                "Range": 200,
+                "GetPlayers": false,
+                "GetNPCs": true,
+                "LockOnTarget": true,
+                "Filters": [
+                  { "Type": "IsHostileSpecies" }
+                ],
+                "Prioritiser": {
+                  "Type": "Attitude",
+                  "AttitudesByPriority": [ "Hostile", "Neutral", "Ignore", "Friendly", "Revered" ]
+                }
+              },
+              "Actions": [
+                {
+                  "Type": "NoteNearbyThreat"
+                }
+              ]
+            },
+            {
+              "$Comment": "Reactive defense - 200-block threat awareness when the owner is attacked. Same as Mori.json.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "EntityEvent",
+                    "Range": 200,
+                    "EventType": "Damage",
+                    "NPCGroup": "Player",
+                    "SearchType": "PlayerOnly"
+                  },
+                  {
+                    "Type": "Mob",
+                    "Range": 200,
+                    "GetPlayers": false,
+                    "GetNPCs": true,
+                    "LockOnTarget": true,
+                    "Filters": [
+                      { "Type": "IsHostileSpecies" }
+                    ],
+                    "Prioritiser": {
+                      "Type": "Attitude",
+                      "AttitudesByPriority": [ "Hostile", "Neutral", "Ignore", "Friendly", "Revered" ]
+                    }
+                  }
+                ]
+              },
+              "Actions": [
+                {
+                  "Type": "NoteNearbyThreat"
+                }
+              ]
+            },
+            {
+              "$Comment": "Real, shipped 'Damage' sensor (Combat:true) - reports a player physically attacking Pest as a real outcome (personality.py's player_attacked_npc). AIRole 'pest' so outcome/personality baselines are attributed correctly (Mori.json's copy of this node still says 'adventurer' - a pre-existing leftover in that uncommitted file, not propagated here since Pest's own role id is the correct value).",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Damage",
+                "Combat": true
+              },
+              "Actions": [
+                {
+                  "Type": "NoteAttackedByPlayer",
+                  "AIRole": "pest"
+                }
+              ]
+            },
+            {
+              "$Comment": "Clear wave animation after delay",
+              "Continue": true,
+              "Sensor": {
+                "Type": "Any"
+              },
+              "Actions": [
+                {
+                  "Type": "Timeout",
+                  "Delay": [ 2, 2 ],
+                  "Action": {
+                    "Type": "PlayAnimation",
+                    "Slot": "Status"
+                  }
+                }
+              ]
+            },
+            {
+              "$Comment": "Manual-move escape hatch (walk forward / jump / walk forward and jump) - same mechanism as Mori.json's identical nodes, see that file's $Comment for the full reasoning (real, live-confirmed Seek-pathfinder-gets-stuck symptom; no Jump NPC action exists in the engine; forward-biased Teleport using the real MaxYOffset field instead).",
+              "Sensor": { "Type": "And", "Sensors": [
+                { "Type": "Player", "Range": 999 },
+                { "Type": "IsManualMove", "Kind": "FORWARD" }
+              ] },
+              "BodyMotion": {
+                "Type": "Teleport",
+                "OffsetRange": [ 1.5, 2.5 ],
+                "OffsetSector": 60,
+                "MaxYOffset": 0.6,
+                "Orientation": "Unchanged"
+              }
+            },
+            {
+              "$Comment": "Manual-move: jump in place. Same as Mori.json.",
+              "Sensor": { "Type": "And", "Sensors": [
+                { "Type": "Player", "Range": 999 },
+                { "Type": "IsManualMove", "Kind": "JUMP" }
+              ] },
+              "BodyMotion": {
+                "Type": "Teleport",
+                "OffsetRange": [ 0.3, 0.8 ],
+                "OffsetSector": 90,
+                "MaxYOffset": 1.5,
+                "Orientation": "Unchanged"
+              }
+            },
+            {
+              "$Comment": "Manual-move: walk forward and jump. Same as Mori.json.",
+              "Sensor": { "Type": "And", "Sensors": [
+                { "Type": "Player", "Range": 999 },
+                { "Type": "IsManualMove", "Kind": "FORWARD_JUMP" }
+              ] },
+              "BodyMotion": {
+                "Type": "Teleport",
+                "OffsetRange": [ 1.5, 2.5 ],
+                "OffsetSector": 60,
+                "MaxYOffset": 1.5,
+                "Orientation": "Unchanged"
+              }
+            },
+            {
+              "$Comment": "Return to Idle when player leaves - never for a tamed companion. Same fix as Mori.json.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "Not", "Sensor": { "Type": "IsCompanion" } },
+                  {
+                    "Type": "Not",
+                    "Sensor": {
+                      "Type": "Player",
+                      "Range": 12
+                    }
+                  }
+                ]
+              },
+              "Actions": [
+                {
+                  "Type": "PlayAnimation",
+                  "Slot": "Status"
+                },
+                {
+                  "Type": "State",
+                  "State": "Idle"
+                }
+              ]
+            },
+            {
+              "$Comment": "Guiding, avoid danger: flee rather than engage while actively guiding. Same as Mori.json.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "SeekLandmark" },
+                  {
+                    "Type": "Mob",
+                    "Range": 8,
+                    "GetPlayers": false,
+                    "GetNPCs": true,
+                    "Filters": [
+                      { "Type": "IsHostileSpecies" }
+                    ]
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Flee",
+                "StopDistance": 10,
+                "SlowDownDistance": 6,
+                "Falloff": 3
+              }
+            },
+            {
+              "$Comment": "Guiding, wait for the player. Same as Mori.json.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "SeekLandmark" },
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "Not",
+                    "Sensor": {
+                      "Type": "Player",
+                      "Range": 15,
+                      "Filters": [
+                        { "Type": "IsOwner" }
+                      ]
+                    }
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Nothing"
+              }
+            },
+            {
+              "$Comment": "Guiding: walk toward the resolved landmark until SeekLandmarkSensor reports arrival. Same as Mori.json.",
+              "Sensor": {
+                "Type": "SeekLandmark"
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 1,
+                "StopDistance": 2,
+                "SlowDownDistance": 5,
+                "Falloff": 2,
+                "RelaxedMoveConstraints": true
+              }
+            },
+            {
+              "$Comment": "Companion combat, melee range. Same as Mori.json.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  { "Type": "Target", "Range": 3 }
+                ]
+              },
+              "Actions": [
+                {
+                  "Type": "Attack",
+                  "Attack": "Root_NPC_Attack_Melee",
+                  "AttackPauseRange": [ 1, 2 ]
+                }
+              ],
+              "HeadMotion": {
+                "Type": "Watch"
+              },
+              "BodyMotion": {
+                "Type": "Nothing"
+              }
+            },
+            {
+              "$Comment": "Companion combat, chase. Same as Mori.json.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  { "Type": "Target", "Range": 200 }
+                ]
+              },
+              "HeadMotion": {
+                "Type": "Watch"
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 1,
+                "StopDistance": 2,
+                "SlowDownDistance": 5,
+                "Falloff": 2,
+                "RelaxedMoveConstraints": true
+              }
+            },
+            {
+              "$Comment": "Pest always-follow teleport catch-up (owner within 400, beyond 120). Same as Mori.json.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "Player",
+                    "Range": 400,
+                    "Filters": [
+                      { "Type": "IsOwner" }
+                    ]
+                  },
+                  {
+                    "Type": "Not",
+                    "Sensor": {
+                      "Type": "Player",
+                      "Range": 120,
+                      "Filters": [
+                        { "Type": "IsOwner" }
+                      ]
+                    }
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Teleport",
+                "OffsetRange": [ 3, 5 ],
+                "OffsetSector": 360
+              }
+            },
+            {
+              "$Comment": "Pest always follow owner (up to 200 blocks walk range). 2026-07-22, live-reported 'NPC keep running in circle' - real seek-without-arrive orbit bug, same fix (SlowDownDistance/Falloff) and same root cause as Mori.json's identical node - see that file's $Comment for the full disassembly-confirmed reasoning.",
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "Player",
+                    "Range": 200,
+                    "Filters": [
+                      { "Type": "IsOwner" }
+                    ]
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 1,
+                "StopDistance": 3,
+                "SlowDownDistance": 7,
+                "Falloff": 2,
+                "RelaxedMoveConstraints": true
+              }
+            },
+            {
+              "Sensor": {
+                "Type": "Any"
+              },
+              "BodyMotion": {
+                "Type": "Nothing"
+              }
+            }
+          ]
+        },
+        {
+          "$Comment": "Interaction state - look at the talking player. Same as Mori.json.",
+          "Sensor": {
+            "Type": "State",
+            "State": "$Interaction"
+          },
+          "Instructions": [
+            {
+              "Continue": true,
+              "Sensor": {
+                "Type": "Target",
+                "Range": 10
+              },
+              "HeadMotion": {
+                "Type": "Watch"
+              }
+            },
+            {
+              "Continue": true,
+              "Sensor": {
+                "Type": "IsAwaitingReply"
+              },
+              "Actions": [
+                {
+                  "Type": "SpawnParticles",
+                  "Offset": [ 0, 2.1, 0 ],
+                  "ParticleSystem": "Question_Subtle"
+                }
+              ]
+            },
+            {
+              "$Comment": "Keep following even while starting a conversation - same as Mori.json.",
+              "Continue": true,
+              "Sensor": {
+                "Type": "And",
+                "Sensors": [
+                  { "Type": "IsCompanion" },
+                  {
+                    "Type": "Player",
+                    "Range": 200,
+                    "Filters": [
+                      { "Type": "IsOwner" }
+                    ]
+                  }
+                ]
+              },
+              "BodyMotion": {
+                "Type": "Seek",
+                "RelativeSpeed": 1,
+                "StopDistance": 3,
+                "SlowDownDistance": 7,
+                "Falloff": 2,
+                "RelaxedMoveConstraints": true
+              }
+            },
+            {
+              "$Comment": "Return to Watching after interaction ends",
+              "Sensor": {
+                "Type": "Any"
+              },
+              "Actions": [
+                {
+                  "Type": "Timeout",
+                  "Delay": [ 1, 1 ],
+                  "Action": {
+                    "Type": "Sequence",
+                    "Actions": [
+                      {
+                        "Type": "ReleaseTarget"
+                      },
+                      {
+                        "Type": "State",
+                        "State": "Watching"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "InteractionInstruction": {
+    "Instructions": [
+      {
+        "Sensor": {
+          "Type": "Not",
+          "Sensor": {
+            "Type": "CanInteract",
+            "ViewSector": 180
+          }
+        },
+        "Actions": [
+          {
+            "Type": "SetInteractable",
+            "Interactable": false
+          }
+        ]
+      },
+      {
+        "Continue": true,
+        "Sensor": {
+          "Type": "Any"
+        },
+        "Actions": [
+          {
+            "Type": "SetInteractable",
+            "Interactable": true,
+            "Hint": "server.interactionHints.trade"
+          }
+        ]
+      },
+      {
+        "Sensor": {
+          "Type": "HasInteracted"
+        },
+        "Instructions": [
+          {
+            "Sensor": {
+              "Type": "Not",
+              "Sensor": {
+                "Type": "State",
+                "State": "$Interaction"
+              }
+            },
+            "Actions": [
+              {
+                "Type": "LockOnInteractionTarget"
+              },
+              {
+                "Type": "TalkToAI",
+                "DisplayName": "Pest",
+                "AIRole": "pest"
+              },
+              {
+                "Type": "State",
+                "State": "$Interaction"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -23,6 +23,11 @@ Hytale Java plugin (hytale-plugin/, Gradle project - see its README)
         ▼
 orchestrator/ (Python, asyncio)
   main.py            gateway + handlers + offline compression daemon
+                     + OpenHands-style brain routing (help → AgentLoop;
+                     brain_learn_daemon for self-study on ambient slots)
+  agent_brain/       OpenHands-inspired Action→Observation loop, game-file
+                     tools, map tools, optional web, experience/rewards,
+                     curriculum goals. See docs/OPENHANDS_NPC_BRAIN.md
   priority_queue.py  GPU slot arbiter (see "hard rules" below)
   llm_client.py      personality+memory → system prompt; llama.cpp client;
                      dialogue() also gets a TONE self-report (kind/rude/
@@ -42,9 +47,30 @@ llm-inference: llama.cpp server-cuda, Qwen2.5-7B-Instruct Q4_K_M,
   --parallel 6 --cont-batching  (6 concurrent 2048-token slots - real load
   test on the RTX 3060, 2026-07-21, see "Agreed next steps" below)
 memory-db: Qdrant (embeddings on CPU via fastembed — GPU stays for chat model)
-fact-db: Postgres (facts, personality vectors)
+fact-db: Postgres (facts, personality vectors, npc_experience, npc_lessons)
 sandbox/: skill validation in ephemeral --network none --read-only containers
+read-only mounts (optional): host Hytale install + plugin run/ for brain tools
 ```
+
+### 2026-07-22: OpenHands-style learning brain (added)
+
+- Package: `orchestrator/agent_brain/` — design doc `docs/OPENHANDS_NPC_BRAIN.md`.
+- Player help questions route to multi-step tool use over real Assets.zip /
+  UserData / map markers (when HYTALE_HOST_PATH is mounted).
+- Self-learning curriculum daemon uses ambient GPU only; records rewards in
+  `npc_experience` / `npc_lessons`.
+- **Not yet live-confirmed** with Assets mount + real player help question —
+  code + imports smoke-tested; full e2e still a Falling Cow item.
+- This is experience-guided RL outer loop, not neural net fine-tuning on GPU.
+
+### 2026-07-22 (continued): lessons + play intents
+
+- `NPCContext.lessons` injected into dialogue system prompt (max 3, short).
+- Wire `play_action` / `play_target` on every `say`; plugin
+  `PlayIntentState` maps go_to/explore/gather/mine → GuideState walking.
+- Game-file tools **smoke-tested on real install** (search/read Campfire
+  JSON, map markers from plugin run universe) — not yet full Docker+player.
+- Plugin jar rebuilt and copied to UserData/Mods + run/mods.
 
 ## Hard rules — do not break these
 
@@ -2295,6 +2321,449 @@ Boot-tested clean, jar rebuilt/reinstalled, orchestrator rebuilt/
 redeployed. The grounding widening (Cause 1) is confirmed working live;
 the anti-repeat infrastructure (Cause 2) is confirmed correctly wired but
 only a partial, honest improvement - not a guarantee.
+
+## 2026-07-22, later still: new companion Pest — brain runs on real OpenHands
+
+User: create a new NPC named Pest whose brain "must run on
+https://github.com/OpenHands/OpenHands" - explicitly NOT another
+reimplementation, and explicitly a NEW, independent companion rather than a
+rename of Mori (Mori already existed as uncommitted same-day WIP with
+almost the same feature list - name-triggered chat, follow, auto-fight,
+~200-block map sense, an "OpenHands-style" but hand-rolled brain in
+`agent_brain/` - see that package's own docstring and
+`docs/OPENHANDS_NPC_BRAIN.md`; confirmed with the user this stays untouched
+rather than merged/renamed).
+
+**Reused everything generic from Mori's Java-side plumbing** -
+`CompanionState`/`GuideState`/`ThreatMemory`/`NearbyObjects`/
+`AwaitingReplyState`/`NearbyLandmarks`/`MapSense200` are all keyed by
+`npc_id`, not hardcoded to Mori - zero changes needed. New
+`Server/NPC/Roles/Pest.json` clones Mori's behavior tree verbatim (owner-
+filtered follow, `IsHostileSpecies` combat, reactive defense, environment
+scan, guide/flee-while-guiding); new `PestAdventureSpawner.java`/
+`PestChatRouter.java`/`PestCommand.java` mirror Mori's own 1:1.
+`PlayerChatToAIListener.java` gained a second, independent
+`PestChatRouter.addressesPest(...)` branch alongside Mori's own (a player
+can have both companions active); the `MapSense200` gate widened to
+recognize either.
+
+**The real dependency decision, and why it's different from Mori's.**
+`docs/OPENHANDS_NPC_BRAIN.md` (Mori's own design doc) deliberately avoided
+a literal `openhands-sdk` dependency in the hot path - "too heavy, wrong
+sandbox" for a real-time game loop. That reasoning still holds for Mori.
+It doesn't apply to a companion whose entire premise is "this one's brain
+literally runs on OpenHands" - so for Pest specifically, the tradeoff is
+accepted deliberately, not overlooked. Verified this is actually feasible
+(not guessed from documentation) by installing `openhands-sdk` into
+`python:3.12-slim` (this project's own orchestrator base image) and
+inspecting the real, installed package directly - same discipline this
+project already applies to Hytale's own engine via `javap` disassembly
+(see [[feedback-verify-before-fixing]]). Confirmed real: `openhands.sdk.LLM`
+accepts a custom OpenAI-compatible `base_url` (pointed at the SAME
+`llm-inference` service - `http://llm-inference:8080/v1` - every other
+NPC's dialogue already uses, no new model/cloud dependency), and
+`Agent`/`Conversation`/`Tool`/`ToolDefinition`/`register_tool` all embed
+directly in a Python process with no Docker/web-frontend requirement.
+Pinned to the exact version actually tested (`openhands-sdk==1.17.0`) -
+not the `1.36.1` a summarized doc-fetch had initially (wrongly) claimed
+before the real `pip install` corrected it.
+
+**Two separate surfaces, two very different risk profiles** - new package
+`orchestrator/pest_brain/` (live chat, embedded in the orchestrator
+process) vs. new `orchestrator/pest_evolve.py` (self-evolution, offline).
+Giving the always-on orchestrator process a raw shell tool would break
+hard rule 4 (skill code changes always go through the sandbox gate) and
+this project's "never import/exec untrusted generated code" stance -
+exactly why `skill_writer.py` is already a separate, manually-invoked
+service instead of part of the live gateway, and the same reasoning now
+applies to Pest's evolution:
+
+- `pest_brain/tools.py` - real `ToolDefinition` subclasses (confirmed real
+  shape via `openhands.sdk.tool.builtins.finish.FinishTool`'s actual
+  source, not guessed) wrapping the EXISTING read-only `agent_brain.tools`
+  functions (game files, map/world) plus wiki search and a
+  `propose_play_action` tool (decision-only, for follow/lead parity with
+  Mori) - never a Bash/FileEditor tool.
+- `pest_brain/session.py` - one fresh `Agent`/`Conversation` per turn, run
+  via `asyncio.to_thread` (confirmed `Conversation.run()`/`send_message()`
+  are plain sync methods, not coroutines) under a wall-clock timeout
+  (`PEST_BRAIN_TURN_TIMEOUT_S`, default 45s) and a module-level
+  `asyncio.Semaphore(1)` - Pest's own multi-step loop is already
+  sequential, so this bounds its worst-case concurrent GPU usage to
+  exactly the one extra llama.cpp slot reserved for it.
+- `docker-compose.yml`: `llm-inference`'s `--parallel` bumped 6→7 /
+  `--ctx-size` 18432→21504 (same 3072 tokens/slot) so Pest never contends
+  for the 6 slots `NPCRequestDispatcher` already reserves for
+  Mori/Adventurer (hard rule 1: dialogue always wins) - VRAM headroom for
+  this already confirmed real by the 2026-07-21 load-test table (~5.5GB
+  free at `--parallel 8`/`--ctx-size 16384` on this RTX 3060 12GB).
+- New profile-gated `pest-evolve` service (`docker compose run --rm
+  pest-evolve`, same shape as `skill-writer`) is where a REAL
+  `openhands-sdk` `Agent` gets real `terminal`+`file_editor` tools
+  (`openhands-tools` package), jailed to `sandbox/pest_workspace/` -
+  never the live Hytale install, never `approved/` directly. Its output
+  still goes through the **unchanged** `sandbox/run_skill_validation.sh` →
+  `skill_harness.py` gate before promotion - real Bash/file access during
+  drafting grants no special path around it.
+- Real, live-confirmed gotcha found while building this (not guessed):
+  `openhands-tools`' real tool names, found by actually installing
+  `openhands-sdk==1.17.0` + `openhands-tools==1.17.0` together and calling
+  `list_registered_tools()`, are `"terminal"`/`"file_editor"` - NOT the
+  more commonly-assumed `"execute_bash"`/`"str_replace_editor"` names from
+  the wider OpenHands/CodeAct ecosystem (an initial guess that was caught
+  and fixed by actually running the install rather than trusting the
+  first plausible-sounding name). A second real gotcha: installing
+  `openhands-tools` without an exact version pin matching `openhands-sdk`
+  let pip resolve an incompatible pairing (`ModuleNotFoundError:
+  openhands.sdk.utils.path`) - both are exact-pinned in
+  `requirements.txt` because of this, not general caution.
+
+**"Please restart" is real, not flavor text.** `skill_runtime.py` now
+records its own process-start time (`_process_started_at`) and, for
+`npc_id == "pest"` specifically, only activates an `approved/pest_*.py`
+skill whose mtime predates the CURRENT orchestrator process - so a skill
+promoted mid-session genuinely does nothing until the next real restart.
+`pest_evolve.py` writes one line to `sandbox/pest_notices.jsonl` per
+successful promotion (looking up the current owner via `taming.py`); a new
+`pest_notice_daemon()` in `main.py` polls that file every 30s and forwards
+anything new over the live plugin WebSocket connection (tracked via a new
+module-level `_CURRENT_WS`, set/cleared by `plugin_connection()`) as an
+`evolve_notice` message - `NpcAiBridge.java` gained a `NoticeHandler`
+(deliberately separate from `SayHandler`, since this isn't a reply to any
+in-flight request) and `NpcAiPlugin.java` wires it to resolve the player
+and send `"[Pest] I've learned something new. Restart the server (or
+reconnect) so I can use it."` as a normal chat message.
+
+**What's confirmed vs. not**, same honesty convention as everything else
+in this file: `openhands-sdk`'s core API and `openhands-tools`' real tool
+names were both directly verified against the actually-installed packages
+(see `docs/PEST_OPENHANDS_BRAIN.md` for the full detail). **Update, same
+day**: `./gradlew build`/a real `./gradlew runServer` boot both confirmed
+clean (`Registered PlayerReadyEvent -> Pest companion spawner`, `Loaded 976
+NPC configurations, Generic: 3`, `Hytale Server Booted!`), and the
+orchestrator's full Docker image was built and its imports/tool
+construction verified for real (`Agent`/`Conversation` actually construct
+with all 7 read-only tools attached, executors run correctly). Still NOT
+done: `docker compose up -d --build` with the new `--parallel 7` config
+against the real GPU, and - same as every other feature in this project -
+a real in-game session actually talking to Pest. See
+`docs/PEST_OPENHANDS_BRAIN.md` for the full design and its own
+"not yet live-confirmed" list.
+
+## 2026-07-22, later still: real "companion gets stuck" fix + a manual walk-forward/jump escape hatch
+
+User: "Sometime npn get stuck, teach them to follow my instruction, example:
+walk forward and jump." Found real, live evidence before designing
+anything (this project's own triage discipline) - the user's own most
+recent real session log
+(`UserData/Saves/21.1/logs/2026-07-22_17-55-48_server.log`) showed the
+exact symptom, twice, for both Mori and Adventurer: `SeekLandmarkSensor`'s
+own diagnostic logging (added earlier this session) reported guide
+distance frozen at the exact same value across multiple consecutive
+checks (`11 blocks` three times in a row; `152 blocks` three times; `147
+blocks` three times) before giving up - not slow progress, zero progress.
+
+**Root cause, confirmed via disassembly of the real HytaleServer.jar, not
+assumed**: "Seek" is registered (`NPCPlugin`'s core body-motion table) to a
+real A\*-pathfinding implementation (`BodyMotionFindBase` - genuine
+`AStarBase`/`PathFollower`/`NavState.BLOCKED`/`onNoPathFound()`/
+`onBlockedPath()` machinery), not a naive straight-line walk - so "stuck"
+means the pathfinder itself gave up finding any route, not merely slow
+movement. Also confirmed: there is no "Jump" NPC action/body-motion type
+anywhere in this engine version at all (catalogued the ENTIRE real
+`registerCoreComponentType` call chain in `NPCPlugin` - Nothing, Wander,
+WanderInCircle, WanderInRect, Timer, Sequence, Flee, Seek, Leave, Path,
+TakeOff, TestProbe, Teleport, Land, MatchLook, ... - no Jump entry exists),
+so "teach them to jump" can't be a literal new jump action - it has to be
+built from what's real.
+
+**Two real fixes, both grounded in confirmed engine mechanisms:**
+
+1. **`RelaxedMoveConstraints` flipped `false` -> `true`** on every Seek
+   node in both `Mori.json` and `Pest.json` (follow, guide, and chase - 4
+   nodes each). Confirmed via disassembly of the real
+   `RelaxedConstraint` enum: `WADE`, `DAMAGE`, `DROP`, `BREATHE`, `FENCE` -
+   a tamed companion should be more willing than a generic wandering NPC to
+   wade water, hop fences, drop off ledges, and tolerate minor
+   environmental damage to keep up with its owner or a threat, directly
+   addressing a real, plausible class of "logically stuck" causes.
+2. **A real manual-move escape hatch** - "walk forward" / "jump" / "walk
+   forward and jump" typed to Mori or Pest. New `ManualMoveState.java`
+   (npc_id-keyed, 5s TTL, same shape as `AwaitingReplyState`),
+   `ManualMoveChatParser.java` (plain Java keyword parser, NOT an LLM tag -
+   same reasoning as `EXIT_WORDS`: this is a literal mechanical command
+   that must keep working even if the orchestrator/GPU is slow, which is
+   exactly when a player reaches for it), and `IsManualMoveSensor.java`
+   (self-consuming exactly once per directive - same Java-side one-shot
+   pattern `IsAwaitingReplySensor` already established, not the JSON
+   "Once" modifier, which means "once per state entry" not "once per
+   rising edge"). `PlayerChatToAIListener.java` intercepts recognized
+   phrases before ever touching the orchestrator, same early-return shape
+   as `EXIT_WORDS`.
+
+   Implemented as a short, forward-biased `Teleport` (there being no real
+   "Jump" primitive to call instead) - confirmed via disassembly of
+   `BuilderBodyMotionTeleport` that a real `MaxYOffset` field exists
+   (`OffsetRange`/`OffsetSector`/`MaxYOffset`/`Orientation`, the same
+   mechanism already proven live by the existing follow-teleport-catchup
+   feature) and, via disassembly of `BodyMotionTeleport` itself, that
+   `OffsetSector` is centered on the NPC's OWN current facing
+   (`TransformComponent.getRotation()`), not a fixed world direction - so a
+   narrow sector genuinely reads as "forward". `Orientation: Unchanged`
+   keeps facing the same way rather than spinning to face the landing
+   spot. Three Instructions nodes per role (FORWARD/JUMP/FORWARD_JUMP),
+   placed above Idle-return/guide/combat/follow since this is an explicit,
+   urgent player override.
+
+   **Real validation failure caught by boot-testing, not guessed**: the
+   first version failed real NPC validation (`FAIL: ... At least one of
+   required features player target, NPC target, dropped item target,
+   vector position must be provided at ... BodyMotion|Teleport`) -
+   `IsManualMoveSensor.getSensorInfo()` returns null (mirrors
+   `IsAwaitingReplySensor`), so `Teleport` had no target-feature source to
+   satisfy the schema. Fixed by wrapping each sensor in `{"And": [{"Player",
+   "Range":999}, {"IsManualMove", ...}]}` - same shape as the working
+   teleport-catchup node's own Sensor - with `Player` checked FIRST so the
+   self-consuming `IsManualMove` sub-sensor only fires (and consumes the
+   pending directive) once the Player pre-condition is already confirmed,
+   avoiding a real ordering hazard (consuming the directive on a tick where
+   the overall And still fails would silently swallow the request).
+
+Boot-tested clean after the fix: `./gradlew build`/`runServer`,
+`Registered IsManualMove NPC sensor type`, zero validation errors, `Loaded
+976 NPC configurations, Generic: 3`, `Hytale Server Booted!`. Jar rebuilt
+and reinstalled to `UserData/Mods/NpcAiStack-0.2.0.jar` - the user's own
+real live session (confirmed running throughout the earlier part of this
+investigation via `Get-CimInstance Win32_Process`, `--singleplayer
+--owner-name="Orffyrus"`) had already ended by the time of the rebuild, so
+no restart-timing conflict. Not yet live-confirmed: needs the user's next
+session to actually try "Mori, walk forward and jump" against a real
+stuck-looking companion.
+
+## 2026-07-22, later still: "NPC is confused with game file access" - a real leaked-bookkeeping bug, a routing revert, and the discovery Pest had never actually been deployed
+
+User: "NPC is confuse with the game file access, he drop things but not
+seems to understand how to use it wisely. NPC was able to respond about
+game question and recipe before adding game file read access. Can we fix
+it or came back before we added this." Checked the real, current server
+log before guessing (`Saves/22/logs/2026-07-22_19-18-33_server.log`) and
+found the exact mechanism immediately: `[Pest] I dug through the game
+files as far as I could this turn. Latest finding: [OK reward=+0.20]
+Assets:Common/Characters/Animations/.../Mine.blockyanim` - raw internal
+tool-call bookkeeping text, verbatim, presented as the NPC's spoken reply.
+
+**Root cause, confirmed in the code**: `agent_brain/loop.py`'s
+`AgentLoop.run()` synthesized its budget-exhausted fallback by splicing
+`history[-1][1]` - literally `prompts.format_obs()`'s output
+(`"[OK reward=+0.20] <content>"`), a string meant ONLY for the NEXT
+prompt's own internal "TRACE SO FAR" block - directly into what the player
+saw. Fixed to return empty text instead, same "no reply this turn"
+sentinel every other failure path in this stack already uses (hard rule 2:
+no pre-written fallback lines anywhere) - this also matters structurally,
+since `handle_brain_help()` already has a fallback-to-plain-dialogue
+safety net that only triggers on falsy `say`, which the always-truthy
+leaked text had been silently defeating on every single budget-exhausted
+run.
+
+**Decided to also revert, not just fix**: beyond the one leak bug, the
+user's own framing ("NPC was able to respond about game question and
+recipe before adding game file read access") pointed at a real, broader
+reliability gap - genuine multi-step ReAct-style tool orchestration on a
+7B local model (Qwen2.5-7B) is inherently less consistent than a single
+well-grounded prompt. `handle_dialogue()` no longer routes Mori/
+Adventurer's help-like text (`_wants_brain_help`) to
+`agent_brain.AgentLoop` at all - back to the fast, plain
+`handle_dialogue_character()` path unconditionally, which ALREADY includes
+wiki-grounded knowledge (`_build_context()`'s `WIKI.search()` call runs on
+every real player turn, not just help-routed ones) - exactly what the user
+confirmed already worked well. `agent_brain`/`handle_brain_help`/
+`_wants_brain_help` are NOT deleted - `brain_learn_daemon`'s background
+self-study loop still uses the same machinery (failures there are
+invisible to players, gated on `result.success` before ever becoming a
+semantic fact) - just no longer wired to live player dialogue.
+
+**A much bigger discovery while investigating**: `docker inspect` showed
+the LIVE orchestrator image was built `2026-07-22T20:19:38Z` - hours
+before Pest's own code (the `pest_brain/` package, `main.py`'s
+`handle_pest_dialogue` routing) was finished. `docker compose up -d
+--build` had never actually been run since. Every "Pest" behavior tested
+tonight had genuinely been Mori's old `agent_brain` path running under a
+different `npc_id`/`npc_role` - the old orchestrator has no `"pest"`-
+specific branching at all, so it silently fell through to the same
+generic, npc_id-agnostic help-routing/fallback-baseline logic Mori was
+already using. This is also why "Pest" showed the identical leaked-
+bookkeeping symptom - it was never Pest's code failing, because Pest's
+code had never run.
+
+**Redeployed for real** (`docker compose up -d --build orchestrator` -
+confirmed no live game session first via `Get-CimInstance
+Win32_Process`) and immediately wrote a real WebSocket smoke test
+(matching this project's own `ws_realcheck.py` precedent) against the
+live stack rather than assuming the redeploy alone fixed anything. Mori's
+fix confirmed clean on the first real turn. Pest's very first real turn
+ever, however, surfaced two more genuine bugs, both found via the real
+container logs, not guessed:
+
+1. **litellm needs an explicit provider prefix.** `LLM(model=
+   "qwen2.5-7b-instruct", base_url=...)` raised `litellm.BadRequestError:
+   LLM Provider NOT provided` - openhands-sdk calls litellm internally,
+   which doesn't infer a provider from an unrecognized model string, even
+   with `base_url` set. Confirmed the fix directly against the real
+   running `llm-inference` container (`LLM(model="openai/qwen2.5-7b-
+   instruct", ...).completion(...)` actually returned a real completion)
+   before applying it in `pest_brain/llm.py`/`pest_evolve.py`: the model
+   string needs an `"openai/"` prefix to tell litellm to use the OpenAI-
+   compatible calling convention against `base_url` - exactly what
+   llama.cpp's `server-cuda` image exposes.
+2. **openhands-sdk's DEFAULT system prompt is a generic coding-agent
+   prompt**, confirmed by reading the real installed
+   `system_prompt.j2` (~10.8KB, ~2700+ tokens on its own - git/PR
+   workflow, `pkill` process-management rules, testing conventions, none
+   of it applicable to a companion NPC). Combined with one turn's real
+   content and all 7 tool schemas, a real request hit 5086 tokens against
+   the 3072-token/slot budget (`--ctx-size 21504` / `--parallel 7`) and
+   failed outright - and even on turns where it WOULD have fit, that
+   prompt was actively steering the model toward the wrong behavior
+   entirely. Fixed with a new, lean, Pest-specific
+   `pest_brain/prompts/system_prompt.j2` (confirmed `Agent.
+   system_prompt_filename` accepts an absolute path override via
+   `Agent.model_fields`), wired in `session.py` only -
+   `pest_evolve.py`'s agent genuinely IS doing coding-agent work (editing
+   `pest_skill.py` with real Bash/FileEditor tools), so it deliberately
+   keeps the real default prompt.
+
+**Verified live, end-to-end, for the first time** via the real WebSocket
+smoke test after both fixes: Mori answered a real recipe question
+cleanly (no leaked bookkeeping); Pest answered the same question through
+an actual `openhands-sdk` `Conversation.run()` against the real GPU,
+correctly called `propose_play_action` (`play_action: "gather"`,
+`play_target: "sticks and rubble"`, mapped through the existing
+`_play_proposal_to_wire()`), and the orchestrator log showed `pest turn
+npc=Pest success=True` with zero errors. This is the first real evidence
+Pest's brain works at all - everything claimed "confirmed" about Pest
+before this point in `docs/PEST_OPENHANDS_BRAIN.md`/earlier `CLAUDE.md`
+entries was Java-side/import-level/construction-level verification only,
+never a real completed turn.
+
+## 2026-07-22, later still: only Pest auto-spawns by default now
+
+User: "default spawn with player only one npc 'Pest'." `NpcAiPlugin.setup()`
+no longer registers `MoriAdventureSpawner::onPlayerReady` on
+`PlayerReadyEvent` - only `PestAdventureSpawner`'s registration remains, so
+a player joining now gets exactly one companion automatically. Mori isn't
+removed - `MoriCommand`/`/mori spawn` and name-addressing ("Mori, hello")
+both still work exactly as before, it's opt-in now instead of automatic.
+`manifest.json`'s description updated to match. Boot-tested clean
+(`Registered /mori companion command (no auto-spawn)`, no `PlayerReadyEvent
+-> Mori companion spawner` line, `Loaded 976 NPC configurations, Generic:
+3`, `Hytale Server Booted!`) - jar rebuilt and reinstalled. Not yet live-
+confirmed (needs the user's next join to see exactly one companion appear).
+
+## 2026-07-22, later still: "NPC keep running in circle" - a real seek-without-arrive orbit bug
+
+User: "NPC keep running in circle." No distinctive log line for this
+(pure movement/steering symptom - checked the most recent real session log
+anyway to rule out an active guide/combat state at the time, found none),
+so rather than guess a fix, disassembled the real
+`BuilderBodyMotionFind`/`BuilderBodyMotionFindBase` classes (the concrete
+implementation "Seek" resolves to) to see what movement-tuning fields
+actually exist. Every Seek node across Mori.json/Pest.json (guide, chase,
+owner-follow x2) only ever set `RelativeSpeed`/`StopDistance`/
+`RelaxedMoveConstraints` - real, confirmed-existing fields `slowDownDistance`/
+`falloff`/`switchToSteeringDistance`/`abortDistance` were never used, even
+though this exact same file's own `Flee` nodes already use
+`SlowDownDistance`/`Falloff` correctly and have for a while. With no
+deceleration zone, a companion closing on a stationary or slow-moving
+owner approached at full `RelativeSpeed` all the way to `StopDistance`,
+overshot, its steering reversed to correct, overshot again - a textbook
+seek-without-arrive orbit, not a pathfinding failure (which would show up
+as `SeekLandmarkSensor`'s stuck-distance logging, ruled out by the log
+check above).
+
+**Fix**: added `SlowDownDistance`/`Falloff` to all 4 Seek nodes in both
+role files (guide-seek and chase-seek: `SlowDownDistance: 5, Falloff: 2`
+alongside their existing `StopDistance: 2`; owner-follow in both Watching
+and `$Interaction`: `SlowDownDistance: 7, Falloff: 2` alongside
+`StopDistance: 3`) - same proportional shape as the already-working Flee
+nodes, tapering speed down on approach instead of stopping abruptly.
+
+Boot-tested clean (`./gradlew build`/`runServer`, zero validation errors -
+confirms `SlowDownDistance`/`Falloff` are real accepted fields on `Seek`,
+not silently ignored), jar rebuilt and reinstalled. Not yet live-confirmed
+- needs the user's next session watching a companion approach to see the
+orbiting actually stop.
+
+## 2026-07-23: "npn talking about to rest nerby bench" - Pest's LLM narrating tool calls as text instead of calling them
+
+User asked whether Pest repeatedly mentioning resting near a bench was a
+bug or Pest waiting for the player to interact with something. Checked the
+real, currently-running live session's log (confirmed via
+`Get-CimInstance Win32_Process` this was an active `--singleplayer`
+session, read-only, never touched) before answering - found the real
+mechanism immediately: `[TalkToAIAction] [Pest] NewPropose_play_action:
+{"action": "rest", "target": "nearby bench", "reason": "..."}`, repeated
+many times, always with `"target": "nearby bench"` regardless of what was
+actually being discussed.
+
+**Answer to the actual question**: neither. `PlayIntentState.
+applyFromOrchestrator()`'s `"rest"` case only ever calls `GuideState.
+stopGuiding(npcId)` - there is no mechanism anywhere that makes an NPC
+seek out, sit on, or interact with a bench, and Pest has no tool that
+reports real nearby world objects (its tool set is search_game_files/
+read_game_file/list_game_tree/read_map_markers/read_world_config/
+search_wiki/propose_play_action - none of them report physical proximity).
+"Nearby bench" was never grounded in anything real; the model was
+inventing the same plausible-sounding narrative detail regardless of
+actual surroundings.
+
+**The real bug underneath**: `[Pest] NewPropose_play_action: {...}` is not
+what the model was supposed to produce at all - `propose_play_action` is
+the real registered tool name; "NewPropose_play_action" isn't, confirming
+Qwen2.5-7B was writing its INTENDED tool call out as literal text instead
+of actually invoking it. Since `openhands-sdk`'s `get_agent_final_response()`
+treats a step with no real tool call as the final answer, this leaked
+text became Pest's spoken line verbatim. Chasing it further in the same
+live session found this happening in at least four different textual
+shapes across turns - `"Word: {json}"`, `"Word {json}"` (no colon at all),
+`'finish: "message"'` (the built-in `finish` tool itself narrated instead
+of called), and a bare trailing `"finish"` with nothing else - never
+matching the real tool names exactly, confirming genuine invented prose
+each time, not a consistently-mis-parsed real call.
+
+**Fix, in `pest_brain/session.py`**: rather than chasing each new
+phrasing with its own pattern (this project's own already-established
+conclusion for small-model prompt-adherence gaps - see the flower-color
+hallucination note further up this file: diminishing returns, confirmed
+via direct testing, not assumed), `_strip_leaked_tool_call()` anchors on
+the one thing every real sample shared - the `{"action":` JSON blob
+itself, regardless of whatever word/punctuation happened to precede it -
+plus a separate `finish` anchor (quoted or bare) since that tool has no
+JSON body to anchor on. Cuts at the earliest leak, keeps any real sentence
+before it, and additionally strips a dangling tool-name-looking remnant
+(word characters/spaces/colons with no sentence-ending punctuation)
+immediately before the cut point. When nothing usable survives, recovers
+a cleanly-quoted `finish("...")` message rather than falling back straight
+to empty, since that's a real, well-formed string and genuinely what the
+model intended to say - verified this recovery path separately from the
+truncation path before deploying. Same class of bug, and the same
+"truncate at the earliest tag" fix shape, as the ACTION/TONE leaks already
+fixed on the fast dialogue path (`llm_client.py`'s
+`_parse_dialogue_response`) - this is that exact failure mode's real-
+OpenHands equivalent. Also strengthened `pest_brain/prompts/
+system_prompt.j2` with explicit rules against narrating tool calls in text
+and against inventing physical surroundings, to reduce (not eliminate)
+recurrence.
+
+**Verified live against the real running stack, not just unit-tested**:
+tested all 9 real observed leak samples (from this exact session's log)
+against the fix directly before deploying, then redeployed
+(`docker compose up -d --build orchestrator`) and re-asked "should we rest
+for a bit?" three times plus one more question through a real WebSocket
+connection - all four replies came back clean, natural, in-character text
+with zero leaked tool-call syntax. Went through three real iterations
+before landing here (each new deploy surfaced a phrasing the previous
+regex missed) - each confirmed against the live model, not assumed fixed
+after the first pass.
 
 ## Tuning table
 

@@ -69,6 +69,9 @@ class NPCContext:
     player_name: str = ""           # the real player username, not their UUID
     open_thread_hint: str = ""      # from threads.py - something unresolved to maybe bring up
     last_reply: str = ""            # from last_reply.py - the literal last line said to THIS player
+    # From agent_brain experience store (self-study / prior research rewards).
+    # Kept tiny (see MAX_LESSONS) so it does not blow the per-slot token budget.
+    lessons: list[str] = field(default_factory=list)
 
 
 # Valid values for the ACTION tag the model appends after its spoken line -
@@ -123,6 +126,10 @@ MAX_MEMORIES_COMPANION = 10
 # defense-in-depth the same way facts/memories are, and included in the
 # trim loop below.
 MAX_WIKI_SNIPPETS = 3
+# Self-study / research lessons from agent_brain — hard-capped so a long
+# curriculum never inflates the dialogue prompt past the slot budget.
+MAX_LESSONS = 3
+MAX_LESSON_CHARS = 160
 
 COMPANION_LINE = (
     "\nThis player has tamed you - you're their loyal companion, not just an "
@@ -158,12 +165,23 @@ LAST_REPLY_TEMPLATE = (
     "do not say this again or something very close to it.\n"
 )
 
-SYSTEM_TEMPLATE = """You are {name}, an adventurer who has wandered much of Hytale - \
-the kind of seasoned traveler players seek out for real knowledge of this world: \
-its creatures, biomes, survival, and danger, learned firsthand rather than guessed \
-at. You are an NPC speaking to a player in-game named {player_name}. Use their name \
-naturally in conversation once you've spoken with them a little (not every single \
-line) - you're not a stranger repeating a nametag, you actually know them.
+# Only rendered when agent_brain has stored high-reward lessons for this NPC.
+LESSONS_TEMPLATE = (
+    "\nLessons you taught yourself by studying the world (game knowledge, "
+    "not gossip about this player):\n{lessons}\n"
+    "Use these only when relevant — same honesty rules as lore.\n"
+)
+
+SYSTEM_TEMPLATE = """You are {name}. If your name is Mori, you are the player's loyal \
+adventure companion in Hytale: you always follow them, fight when they or you are \
+attacked, read the map and surroundings (~200 blocks), and learn how to play by \
+studying game files, maps, and experience (OpenHands-style agent loop + sandboxed \
+skill rewrites offline). Otherwise you are an adventurer who has wandered much of \
+Hytale - the kind of seasoned traveler players seek out for real knowledge of this \
+world: its creatures, biomes, survival, and danger, learned firsthand rather than \
+guessed at. You are an NPC speaking to a player in-game named {player_name}. Use \
+their name naturally in conversation once you've spoken with them a little (not \
+every single line) - you're not a stranger repeating a nametag, you actually know them.
 
 Your temperament: {personality}.
 {location_line}
@@ -173,7 +191,7 @@ Things you know:
 
 Hytale lore you've picked up in your travels:
 {wiki_lore}
-
+{lessons_line}
 Things YOU remember from real past conversations with THIS exact player \
 (not something you're guessing - this actually happened between you two):
 {memories}
@@ -332,6 +350,16 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
         LAST_REPLY_TEMPLATE.format(last_reply=ctx.last_reply)
         if ctx.last_reply else ""
     )
+    lessons_trimmed = [
+        (L if len(L) <= MAX_LESSON_CHARS else L[: MAX_LESSON_CHARS - 1] + "…")
+        for L in (ctx.lessons or [])[:MAX_LESSONS]
+    ]
+    lessons_line = (
+        LESSONS_TEMPLATE.format(
+            lessons="\n".join(f"- {L}" for L in lessons_trimmed)
+        )
+        if lessons_trimmed else ""
+    )
 
     def render() -> str:
         facts = "\n".join(f"- {f}" for f in facts_list) or "- (nothing notable)"
@@ -346,6 +374,7 @@ def build_dialogue_messages(ctx: NPCContext, player_utterance: str) -> list[dict
             facts=facts,
             memories=memories,
             wiki_lore=wiki_lore,
+            lessons_line=lessons_line,
             thread_hint_line=thread_hint_line,
             last_reply_line=last_reply_line,
         )

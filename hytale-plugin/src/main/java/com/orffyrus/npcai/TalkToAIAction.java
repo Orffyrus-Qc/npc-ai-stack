@@ -84,6 +84,10 @@ public class TalkToAIAction extends ActionBase {
         // markers (playerUuid) - see NearbyLandmarks' javadoc for why this
         // and resolveGuideTarget() share one candidate list.
         String situation = NearbyLandmarks.describe(npcId, playerUuid, ref, store);
+        // Mori (and any companion) keeps a 200-block map sense cache for chat turns.
+        if (MoriChatRouter.isMoriRole(npcId) || CompanionState.isCompanion(npcId)) {
+            MapSense200.record(npcId, situation);
+        }
 
         NpcAiPlugin.ACTIVE_CONVERSATIONS.put(
                 playerUuid,
@@ -125,7 +129,7 @@ public class TalkToAIAction extends ActionBase {
                 playerRef.getUsername(),
                 "(the player approaches and interacts with you)",
                 fullSituation,
-                (id, text, action, isCompanion, guideTarget) -> {
+                (id, text, action, isCompanion, guideTarget, playAction, playTarget) -> {
                     // Fires on the WebSocket thread, ~1-2s after this method
                     // returns (real LLM round trip). The playerRef captured
                     // above may be stale by then, so re-resolve a fresh one
@@ -160,6 +164,7 @@ public class TalkToAIAction extends ActionBase {
                     if (isCompanion) {
                         CompanionState.markCompanion(id, playerUuid);
                     }
+                    boolean guided = false;
                     if ("offer_guide".equals(action)) {
                         // SeekLandmarkSensor checks this every tick and walks
                         // toward the target NearbyLandmarks resolves,
@@ -176,7 +181,13 @@ public class TalkToAIAction extends ActionBase {
                         // itself (via the empty/"landmark" case) when it
                         // has nothing specific in mind either.
                         GuideState.startGuidingFromKeyword(id, playerUuid, guideTarget);
+                        guided = true;
                     }
+                    // OpenHands brain play intent (may be empty) — maps
+                    // gather/explore/go_to onto guiding when action wasn't
+                    // already offer_guide this reply.
+                    PlayIntentState.applyFromOrchestrator(
+                            id, playerUuid, playAction, playTarget, guided);
                 });
 
         return true;

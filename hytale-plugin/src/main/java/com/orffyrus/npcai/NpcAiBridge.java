@@ -23,20 +23,44 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class NpcAiBridge implements WebSocket.Listener {
 
-    /** (npcId, text, action, isCompanion, guideTarget) - action is one of
-     * the orchestrator's llm_client.VALID_ACTIONS ("none", "offer_guide",
-     * "offer_fight", "decline_guide", "accept_tame").
+    /** (npcId, text, action, isCompanion, guideTarget, playAction, playTarget).
+     * action is one of the orchestrator's llm_client.VALID_ACTIONS
+     * ("none", "offer_guide", "offer_fight", "decline_guide", "accept_tame").
      * isCompanion is the Postgres-backed taming truth (taming.py),
      * resent on every reply so the plugin's own ephemeral CompanionState
      * can resync after a restart - see CompanionState.java. guideTarget
      * (added 2026-07-22) is only meaningful when action=="offer_guide" - a
      * short keyword the model extracted from what the player asked for
      * ("temple", "desert", "water", ...), empty string if none/not
-     * applicable - see GuideState.Target.NAMED. No built-in
-     * java.util.function type takes five args, hence this. */
+     * applicable - see GuideState.Target.NAMED.
+     * playAction/playTarget (added 2026-07-22, OpenHands brain) carry an
+     * optional player-like intent (gather/go_to/explore/rest/…) — see
+     * PlayIntentState. Empty strings when unused. */
     @FunctionalInterface
     public interface SayHandler {
-        void onSay(String npcId, String text, String action, boolean isCompanion, String guideTarget);
+        void onSay(String npcId, String text, String action, boolean isCompanion,
+                   String guideTarget, String playAction, String playTarget);
+    }
+
+    /** Unprompted (no req_id, not a reply to any pending request) push from
+     * the orchestrator - e.g. Pest's evolve_notice, sent once when a
+     * self-rewritten skill clears sandbox validation and the player should
+     * be told to restart before it activates (see pest_brain/activation.py
+     * and docs/PEST_OPENHANDS_BRAIN.md). Kept as its own handler type
+     * rather than overloading SayHandler since there's no in-flight request
+     * this is answering - it can arrive at any time. */
+    @FunctionalInterface
+    public interface NoticeHandler {
+        void onNotice(String npcId, String playerId, String text);
+    }
+
+    /** Set once at plugin setup (NpcAiPlugin.java, which is where Hytale API
+     * imports belong - see this file's own "zero Hytale imports" hard
+     * rule) to resolve playerId -> a real PlayerRef and send the chat line. */
+    private volatile NoticeHandler noticeHandler;
+
+    public void setNoticeHandler(NoticeHandler handler) {
+        this.noticeHandler = handler;
     }
 
     /** How long an in-flight request's handler is kept waiting for a reply
@@ -204,12 +228,25 @@ public class NpcAiBridge implements WebSocket.Listener {
     private void handleMessage(String json) {
         // Tiny extraction to avoid a JSON dependency; swap in Gson/Jackson
         // (already on most plugin classpaths) for anything more complex.
+        String type = extract(json, "type");
+        if ("evolve_notice".equals(type)) {
+            NoticeHandler handler = noticeHandler;
+            String noticeNpcId = extract(json, "npc_id");
+            String noticePlayerId = extract(json, "player_id");
+            String noticeText = extract(json, "text");
+            if (handler != null && noticeNpcId != null && noticePlayerId != null && noticeText != null) {
+                handler.onNotice(noticeNpcId, noticePlayerId, noticeText);
+            }
+            return;
+        }
         String reqId = extract(json, "req_id");
         String npcId = extract(json, "npc_id");
         String text = extract(json, "text");
         String action = extract(json, "action");
         boolean isCompanion = extractBoolean(json, "is_companion");
         String guideTarget = extract(json, "guide_target");
+        String playAction = extract(json, "play_action");
+        String playTarget = extract(json, "play_target");
         if (reqId == null || npcId == null) return;
         // One-shot: remove() instead of get() so a reply can never be
         // delivered twice and a stale/duplicate message can't resurrect an
@@ -227,8 +264,14 @@ public class NpcAiBridge implements WebSocket.Listener {
             //
             // IMPORTANT: hop back onto the game/entity thread before touching
             // world state - this callback arrives on the websocket thread.
-            pending.handler().onSay(npcId, text, action != null ? action : "none", isCompanion,
-                    guideTarget != null ? guideTarget : "");
+            pending.handler().onSay(
+                    npcId,
+                    text,
+                    action != null ? action : "none",
+                    isCompanion,
+                    guideTarget != null ? guideTarget : "",
+                    playAction != null ? playAction : "",
+                    playTarget != null ? playTarget : "");
         }
     }
 

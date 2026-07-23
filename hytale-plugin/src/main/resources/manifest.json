@@ -1,8 +1,8 @@
 {
     "Group": "com.orffyrus",
     "Name": "NpcAiStack",
-    "Version": "0.1.0",
-    "Description": "LLM-driven NPC dialogue, memory, and evolving personality - bridges to the npc-ai-stack Docker orchestrator over WebSocket.",
+    "Version": "0.2.0",
+    "Description": "LLM-driven NPCs - Pest adventure companion (auto-spawns, follow, fight, chat as Pest, brain runs on real OpenHands/openhands-sdk) + Mori adventure companion (follow, fight, chat as Mori, OpenHands-style learning brain - available on request via /mori spawn, no longer auto-spawns).",
     "Authors": [
         {
             "Name": "orffyrus"
